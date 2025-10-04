@@ -1,0 +1,5 @@
+{
+  "solver_name": "mathsat",
+  "solver_path": "/mnt/c/Users/Viki/Desktop/school_mgr/diplomova_praca/mathsat-5.6.11-win64-msvc/bin/mathsat.exe",
+  "pass_via_stdin": true
+}

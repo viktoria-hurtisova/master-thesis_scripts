@@ -1,0 +1,6 @@
+{
+  "solver_name": "opensmt",
+  "solver_path": "./opensmt-master/build/opensmt",
+  "pass_via_stdin": false
+}
+  

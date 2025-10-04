@@ -1,0 +1,5 @@
+{
+  "solver_name": "z3",
+  "solver_path": "z3/bin/z3.exe",
+  "pass_via_stdin": false
+}

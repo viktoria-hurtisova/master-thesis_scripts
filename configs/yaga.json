@@ -1,0 +1,5 @@
+{
+  "solver_name": "yaga",
+  "solver_path": "yaga/cmake-build-release-wsl/smt",
+  "pass_via_stdin": false
+}
