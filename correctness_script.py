@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+import csv
 import itertools
 import json
 import os
@@ -11,7 +12,7 @@ import tempfile
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 # notes
 #  you can form a new formula by XORing them together (φ₁ ⊕ φ₂) 
@@ -38,18 +39,63 @@ class InterpolantSolver(ABC):
         self.pass_via_stdin = config.get('pass_via_stdin', False)
 
     def run(self, input_path: str) -> Tuple[str, str, float]:
-        #TODO: implement
-
-        # run the preprocessing function
-        # run the solver
-        # run the postprocessing function
-        # delete the temporary file
+        """
+        Run the solver on the input file and return result, interpolant, and time.
         
-        # return sat/unsat, the interpolant and the time it took to run the solver
-
-        # if the result of the run of the solver is sat, the interpolant is null,the time it took to run the solver and no postprocessing is done
+        Returns:
+            Tuple[str, str, float]: (sat/unsat result, interpolant or None, execution time)
+        """
+        start_time = time.perf_counter()
         
-        raise NotImplementedError
+        try:
+            # Preprocess the input file for this solver
+            processed_path = self._preprocess(input_path)
+            
+            # Run the solver
+            if self.pass_via_stdin:
+                with open(processed_path, 'r', encoding='utf-8') as fp:
+                    result = subprocess.run(
+                        [self.solver_path, "-input=smt2"],
+                        stdin=fp,
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
+            else:
+                result = subprocess.run(
+                    [self.solver_path, processed_path],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+            
+            elapsed = time.perf_counter() - start_time
+            
+            # Parse the result
+            stdout_lower = result.stdout.lower()
+            if "unsat" in stdout_lower:
+                sat_result = "unsat"
+                # Extract and postprocess the interpolant
+                interpolant = self._postprocess(result.stdout)
+            elif "sat" in stdout_lower:
+                sat_result = "sat"
+                interpolant = None
+            else:
+                sat_result = "unknown"
+                interpolant = None
+            
+            # Clean up temporary file if it was created
+            if processed_path != input_path:
+                try:
+                    os.unlink(processed_path)
+                except OSError:
+                    pass  # Ignore cleanup errors
+            
+            return sat_result, interpolant, elapsed
+            
+        except Exception as e:
+            elapsed = time.perf_counter() - start_time
+            raise RuntimeError(f"Solver execution failed: {e}") from e
 
     @abstractmethod
     def _preprocess(self, input_path: str) -> str:
@@ -72,43 +118,38 @@ class MathSat(InterpolantSolver):
     def __init__(self, config_path: str):
         super().__init__(config_path)
 
-    def run(self, input_path: str) -> Tuple[str, float]:
-        #TODO: run the base implementation of the solver
-
     def _preprocess(self, input_path: str) -> str:
         # TODO: implement
         return input_path
 
     def _postprocess(self, raw_output: str) -> str:
-        # TODO: implement
-        return raw_output
+        # TODO: implement proper MathSAT interpolant extraction
+        # For now, return a placeholder
+        return raw_output.strip()
 
 class Yaga(InterpolantSolver):
     
     def __init__(self, config_path: str):
         super().__init__(config_path)
 
-    def run(self, input_path: str) -> Tuple[str, float]:
-        #TODO: run the base implementation of the solver
-
     def _preprocess(self, input_path: str) -> str:
         #TODO: implement
         return input_path
 
     def _postprocess(self, raw_output: str) -> str:
-        #TODO: implement
-
-        return raw_output    
+        # TODO: implement proper Yaga interpolant extraction
+        # For now, return a placeholder
+        return raw_output.strip()    
 
 # =========================
 # Verification
 # =========================
 
-def create_verification_input_file(source_path: str, interpolant_A: str, interpolant_B: str) -> str:
+def create_comparison_input_file(source_path: str, interpolant_A: str, interpolant_B: str) -> str:
     #TODO: implement
     return source_path
 
-def verify_interpolant(file_path: str, interpolant_A: str, interpolant_B: str) -> bool:
+def compare_interpolants(file_path: str, interpolant_A: str, interpolant_B: str) -> bool:
     #TODO: implement
 
     # we are using z3 as the verification solver
@@ -120,27 +161,342 @@ def verify_interpolant(file_path: str, interpolant_A: str, interpolant_B: str) -
 # Orchestrator
 # =========================
 
-def process_file(path: str, solvers: List[InterpolantSolver], outdir: str) -> int:
-    #TODO: implement
-
-    # for each solver in the solvers list
-    # run the solver.run function
-    # verify the interpolant
-    # if the interpolant is not valid, return 1
-    # if the interpolant is valid, return 0
+def process_file(path: str, solvers: List[InterpolantSolver]) -> Dict[str, Any]:
+    """
+    Process a single SMT file with multiple solvers and return results.
     
-    return 0
+    Returns:
+        Dict containing all the results and metadata for logging
+    """
+    file_path = Path(path)
+    
+    if len(solvers) != 2:
+        raise ValueError("Exactly two solvers are required for comparison")
+    
+    solver_a, solver_b = solvers
+    
+    result = {
+        'file_name': file_path.name,
+        'solver_a_name': solver_a.name,
+        'solver_b_name': solver_b.name,
+        'success': False,
+        'error_message': None,
+        'solver_runs': [],  # List of individual solver run results
+        'comparison_result': None  # Result of interpolant comparison
+    }
+    
+    try:
+        # Run both solvers on the input file
+        print(f"Running {solver_a.name}...")
+        result_a, interpolant_a, time_a = solver_a.run(path)
+        
+        print(f"Running {solver_b.name}...")
+        result_b, interpolant_b, time_b = solver_b.run(path)
+        
+        print(f"Results: {solver_a.name}={result_a} ({time_a:.3f}s), {solver_b.name}={result_b} ({time_b:.3f}s)")
+        
+        # Store individual solver run results
+        result['solver_runs'] = [
+            {'solver': solver_a.name, 'input_file': file_path.name, 'time_seconds': f"{time_a:.6f}", 'result': result_a},
+            {'solver': solver_b.name, 'input_file': file_path.name, 'time_seconds': f"{time_b:.6f}", 'result': result_b}
+        ]
+        
+        # Both solvers must agree on satisfiability
+        if result_a != result_b:
+            print(f"ERROR: Solvers disagree on satisfiability - {solver_a.name}: {result_a}, {solver_b.name}: {result_b}")
+            result['comparison_result'] = "disagreement_on_satisfiability"
+            result['error_message'] = f"Solvers disagree: {solver_a.name}={result_a}, {solver_b.name}={result_b}"
+            return result
+        
+        # If the formula is SAT, no interpolant should be produced
+        if result_a == "sat":
+            if interpolant_a is not None or interpolant_b is not None:
+                print("ERROR: Interpolants produced for SAT formula")
+                result['comparison_result'] = "error_interpolant_for_sat"
+                result['error_message'] = "Interpolants produced for SAT formula"
+                return result
+            print("Both solvers correctly determined SAT (no interpolant needed)")
+            result['comparison_result'] = "both_sat_no_interpolant"
+            result['success'] = True
+            return result
+        
+        # If UNSAT, both should produce interpolants
+        if result_a == "unsat":
+            if interpolant_a is None:
+                print(f"ERROR: {solver_a.name} did not produce an interpolant for UNSAT formula")
+                result['comparison_result'] = f"no_interpolant_from_{solver_a.name}"
+                result['error_message'] = f"{solver_a.name} did not produce an interpolant"
+                return result
+            if interpolant_b is None:
+                print(f"ERROR: {solver_b.name} did not produce an interpolant for UNSAT formula")
+                result['comparison_result'] = f"no_interpolant_from_{solver_b.name}"
+                result['error_message'] = f"{solver_b.name} did not produce an interpolant"
+                return result
+            
+            # Compare the interpolants
+            print("Comparing interpolants...")
+            
+            are_equal = compare_interpolants(path, interpolant_a, interpolant_b)
+            result['comparison_result'] = str(are_equal).lower()
+            
+            if are_equal:
+                print("Interpolants are equal")
+            else:
+                print("Interpolants are different")
+            
+            # Store detailed results for file output
+            result['detailed_results'] = {
+                'file_name': file_path.name,
+                'result': result_a,
+                'solver_a_time': time_a,
+                'solver_b_time': time_b,
+                'interpolants_equal': are_equal,
+                'solver_a_interpolant': interpolant_a,
+                'solver_b_interpolant': interpolant_b
+            }
+            
+            result['success'] = True
+            return result
+        
+        # Unknown result
+        print(f"ERROR: Unknown result: {result_a}")
+        result['comparison_result'] = f"unknown_result_{result_a}"
+        result['error_message'] = f"Unknown result: {result_a}"
+        return result
+        
+    except Exception as e:
+        print(f"ERROR: Exception during processing: {e}")
+        result['comparison_result'] = f"exception_{str(e).replace(',', ';')}"
+        result['error_message'] = f"Exception: {e}"
+        return result
+
+def write_results(file_result: Dict[str, Any], solver_csv_writer: csv.writer, 
+                 comparison_csv_writer: csv.writer, detailed_file) -> None:
+    """
+    Write the results from process_file to CSV files and append to detailed results file.
+    
+    Args:
+        file_result: Dictionary containing all results from process_file
+        solver_csv_writer: CSV writer for individual solver runs
+        comparison_csv_writer: CSV writer for interpolant comparisons
+        detailed_file: Open file handle for detailed results
+    """
+    # Write solver runs to CSV
+    for run in file_result['solver_runs']:
+        solver_csv_writer.writerow([run['solver'], run['input_file'], run['time_seconds'], run['result']])
+    
+    # Write comparison result to CSV
+    comparison_csv_writer.writerow([
+        file_result['file_name'], 
+        file_result['solver_a_name'], 
+        file_result['solver_b_name'], 
+        file_result['comparison_result']
+    ])
+    
+    # Write to detailed results file
+    detailed_file.write(f"=== {file_result['file_name']} ===\n")
+    detailed_file.write(f"Solvers: {file_result['solver_a_name']} vs {file_result['solver_b_name']}\n")
+    detailed_file.write(f"Success: {file_result['success']}\n")
+    detailed_file.write(f"Comparison Result: {file_result['comparison_result']}\n")
+    
+    if file_result['error_message']:
+        detailed_file.write(f"Error: {file_result['error_message']}\n")
+    
+    # Write detailed results if available (for UNSAT cases)
+    if 'detailed_results' in file_result:
+        details = file_result['detailed_results']
+        detailed_file.write(f"SAT Result: {details['result']}\n")
+        detailed_file.write(f"{file_result['solver_a_name']} time: {details['solver_a_time']:.6f}s\n")
+        detailed_file.write(f"{file_result['solver_b_name']} time: {details['solver_b_time']:.6f}s\n")
+        detailed_file.write(f"Interpolants equal: {details['interpolants_equal']}\n")
+        detailed_file.write(f"{file_result['solver_a_name']} interpolant: {details['solver_a_interpolant']}\n")
+        detailed_file.write(f"{file_result['solver_b_name']} interpolant: {details['solver_b_interpolant']}\n")
+    
+    detailed_file.write("\n")  # Add blank line between entries
+    detailed_file.flush()  # Ensure data is written immediately
+
+
+def get_next_run_number(output_dir: Path) -> int:
+    """
+    Get the next run number by checking existing files in the output directory.
+    
+    Args:
+        output_dir: Directory to check for existing run files
+        
+    Returns:
+        Next available run number
+    """
+    # Look for existing files with pattern *_run_N.* 
+    existing_files = list(output_dir.glob("*_run_*.csv")) + list(output_dir.glob("*_run_*.txt"))
+    
+    if not existing_files:
+        return 1
+    
+    # Extract run numbers from existing files
+    run_numbers = []
+    for file_path in existing_files:
+        # Look for pattern like "correctness_solver_runs_run_3.csv"
+        parts = file_path.stem.split('_run_')
+        if len(parts) == 2:
+            try:
+                run_num = int(parts[1])
+                run_numbers.append(run_num)
+            except ValueError:
+                continue
+    
+    return max(run_numbers) + 1 if run_numbers else 1
+
+
+defined_solvers = ["mathsat", "yaga", "opensmt"]
+
+def load_config(config_name: str) -> str:
+    """Load config file path for a given solver name."""
+    project_root = Path(__file__).resolve().parent.parent
+    config_path = project_root / "scripts" / "configs" / f"{config_name}.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    return str(config_path)
+
+
+def gather_inputs(inputs_field: str) -> List[Path]:
+    """Return a list of *.smt2 files to feed to the solver."""
+    target = Path(inputs_field).expanduser().resolve()
+    if target.is_dir():
+        files = sorted(target.glob("*.smt2"))
+        if not files:
+            sys.exit(f"Error: No .smt2 files found in directory {target}")
+        return files
+    elif target.is_file():
+        return [target]
+    else:
+        sys.exit(f"Error: Input path does not exist: {target}")
+
+
+def create_solver(solver_name: str) -> InterpolantSolver:
+    """Factory function to create solver instances."""
+    config_path = load_config(solver_name)
+    
+    if solver_name == "mathsat":
+        return MathSat(config_path)
+    elif solver_name == "yaga":
+        return Yaga(config_path)
+    elif solver_name == "opensmt":
+        # For now, we'll use Yaga as a placeholder for OpenSMT
+        # since OpenSMT class is not implemented yet
+        return Yaga(config_path)
+    else:
+        raise ValueError(f"Unknown solver: {solver_name}")
+
 
 def main(argv: List[str]) -> int:
-    #TODO: implement
-
-    # on the input we have names of two solvers and the folder with the inputs
-    # the names of the solvers must be two of the following: mathsat, yaga, opensmt
-    # we need to run the process_file function for each file in the inputs folder
-
-    # for each file in the inputs folder
-    # run the process_file function
-
+    """Main function to run correctness verification between two solvers."""
+    parser = argparse.ArgumentParser(
+        description="Verify interpolant correctness between two SMT solvers"
+    )
+    parser.add_argument(
+        "solver1", 
+        choices=defined_solvers,
+        help="First solver name (mathsat, yaga, opensmt)"
+    )
+    parser.add_argument(
+        "solver2", 
+        choices=defined_solvers,
+        help="Second solver name (mathsat, yaga, opensmt)"
+    )
+    parser.add_argument(
+        "inputs", 
+        help="Path to input files or directory containing .smt2 files"
+    )
+    parser.add_argument(
+        "-o", "--output", 
+        help="Output directory for results (default: creates 'results' folder in current directory)"
+    )
+    
+    args = parser.parse_args(argv)
+    
+    if args.solver1 == args.solver2:
+        sys.exit("Error: Cannot compare a solver with itself")
+    
+    # Create solver instances
+    try:
+        solver1 = create_solver(args.solver1)
+        solver2 = create_solver(args.solver2)
+    except (FileNotFoundError, ValueError) as e:
+        sys.exit(f"Error creating solvers: {e}")
+    
+    # Get input files
+    input_files = gather_inputs(args.inputs)
+    
+    # Set up output directory
+    if args.output:
+        output_dir = Path(args.output)
+    else:
+        output_dir = Path.cwd() / "results"
+    
+    # Create output directory if it doesn't exist
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Get next run number
+    run_number = get_next_run_number(output_dir)
+    
+    # Set up output file paths with run numbers
+    solver_csv_path = output_dir / f"correctness_solver_runs_run_{run_number}.csv"
+    comparison_csv_path = output_dir / f"correctness_interpolant_comparison_run_{run_number}.csv"
+    detailed_results_path = output_dir / f"detailed_results_run_{run_number}.txt"
+    
+    print(f"Comparing solvers  : {args.solver1} vs {args.solver2}")
+    print(f"Input files        : {len(input_files)} files")
+    print(f"Output directory   : {output_dir}")
+    print(f"Run number         : {run_number}")
+    print(f"Solver runs CSV    : {solver_csv_path}")
+    print(f"Comparison CSV     : {comparison_csv_path}")
+    print(f"Detailed results   : {detailed_results_path}\n")
+    
+    # Prepare CSV writers and detailed results file
+    with (solver_csv_path.open("w", newline="", encoding="utf-8") as solver_csv_file,
+          comparison_csv_path.open("w", newline="", encoding="utf-8") as comparison_csv_file,
+          detailed_results_path.open("w", encoding="utf-8") as detailed_file):
+        
+        solver_csv_writer = csv.writer(solver_csv_file)
+        comparison_csv_writer = csv.writer(comparison_csv_file)
+        
+        # Always write headers since we're creating new files
+        solver_csv_writer.writerow(["solver", "input_file", "time_seconds", "result"])
+        comparison_csv_writer.writerow(["file_name", "solver1", "solver2", "interpolants_equal"])
+        
+        # Write header to detailed results file
+        detailed_file.write(f"Detailed Results - Run {run_number}\n")
+        detailed_file.write(f"Solvers: {args.solver1} vs {args.solver2}\n")
+        detailed_file.write(f"Generated for {len(input_files)} input files\n")
+        detailed_file.write("=" * 50 + "\n\n")
+        
+        failures = 0
+        
+        # Process each file
+        for smt_file in input_files:
+            print(f"=== Processing {smt_file.name} ===")
+            
+            # Process the file and get results
+            file_result = process_file(str(smt_file), [solver1, solver2])
+            
+            # Write results to CSV files and detailed results file
+            write_results(file_result, solver_csv_writer, comparison_csv_writer, detailed_file)
+            
+            # Flush CSV files after each file
+            solver_csv_file.flush()
+            comparison_csv_file.flush()
+            
+            # Track failures and provide feedback
+            if not file_result['success']:
+                failures += 1
+                print(f"FAILURE: {smt_file.name}")
+                if file_result['error_message']:
+                    print(f"  Error: {file_result['error_message']}")
+            else:
+                print(f"SUCCESS: {smt_file.name}")
+            print()
+    
+    print(f"\nSummary: {failures} failures out of {len(input_files)} files")
     return 1 if failures else 0
 
 
