@@ -45,11 +45,12 @@ class InterpolantSolver(ABC):
         Returns:
             Tuple[str, str, float]: (sat/unsat result, interpolant or None, execution time)
         """
-        start_time = time.perf_counter()
         
         try:
             # Preprocess the input file for this solver
             processed_path = self._preprocess(input_path)
+            
+            start_time = time.perf_counter()
             
             # Run the solver
             if self.pass_via_stdin:
@@ -119,13 +120,80 @@ class MathSat(InterpolantSolver):
         super().__init__(config_path)
 
     def _preprocess(self, input_path: str) -> str:
-        # TODO: implement
-        return input_path
+        """
+        Preprocess SMT file for MathSAT interpolant generation:
+        - Add (set-option :produce-interpolants true) at the start
+        - Add (get-interpolant (A)) after (check-sat)
+        - Replace :named with :interpolation-group
+        """
+        import tempfile
+        
+        # Read the original file
+        with open(input_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Create a temporary file for the processed content
+        temp_fd, temp_path = tempfile.mkstemp(suffix='.smt2', prefix='mathsat_')
+        
+        try:
+            with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+                # Split content into lines for processing
+                lines = content.split('\n')
+                processed_lines = []
+                
+                # Add the produce-interpolants option at the beginning
+                processed_lines.append('(set-option :produce-interpolants true)')
+                processed_lines.append('')
+                
+                # Process each line
+                for line in lines:
+                    # Replace :named with :interpolation-group
+                    processed_line = line.replace(':named', ':interpolation-group')
+                    processed_lines.append(processed_line)
+                    
+                    # If this line contains (check-sat), add the get-interpolant command after it
+                    if '(check-sat)' in processed_line:
+                        processed_lines.append('(get-interpolant (A))')
+                
+                # Write all processed lines
+                f.write('\n'.join(processed_lines))
+            
+            return temp_path
+            
+        except Exception:
+            # Clean up temp file if something goes wrong
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
 
     def _postprocess(self, raw_output: str) -> str:
-        # TODO: implement proper MathSAT interpolant extraction
-        # For now, return a placeholder
-        return raw_output.strip()
+        """
+        Postprocess MathSAT output to extract interpolant:
+        - Expects exactly two lines: sat/unsat result and interpolant
+        - Extract interpolant from the second line
+        - Replace (to_real <num>) with just the number within larger expressions
+        """
+        import re
+        
+        lines = raw_output.strip().split('\n')
+        
+        # Filter out empty lines
+        non_empty_lines = [line.strip() for line in lines if line.strip()]
+        
+        if len(non_empty_lines) < 2:
+            return None
+        
+        # First line should be sat/unsat, second line should be interpolant
+        interpolant_line = non_empty_lines[1]
+        
+        # Replace (to_real <num>) with just the number
+        # Pattern to match (to_real <number>) where number can be decimal
+        pattern = r'\(to_real\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\)'
+        interpolant = re.sub(pattern, r'\1', interpolant_line)
+        
+        return interpolant.strip()
 
 class Yaga(InterpolantSolver):
     
@@ -137,9 +205,119 @@ class Yaga(InterpolantSolver):
         return input_path
 
     def _postprocess(self, raw_output: str) -> str:
-        # TODO: implement proper Yaga interpolant extraction
-        # For now, return a placeholder
-        return raw_output.strip()    
+        """
+        Postprocess Yaga output to extract interpolant:
+        - Expects exactly two lines: sat/unsat result and interpolant
+        - Extract interpolant from the second line
+        """
+        lines = raw_output.strip().split('\n')
+        
+        # Filter out empty lines
+        non_empty_lines = [line.strip() for line in lines if line.strip()]
+        
+        if len(non_empty_lines) < 2:
+            return None
+        
+        # First line should be sat/unsat, second line should be interpolant
+        interpolant = non_empty_lines[1]
+        
+        return interpolant.strip()
+
+class OpenSMT(InterpolantSolver):
+    
+    def __init__(self, config_path: str):
+        super().__init__(config_path)
+
+    def _preprocess(self, input_path: str) -> str:
+        """
+        Preprocess SMT file for OpenSMT interpolant generation:
+        - Add (set-option :produce-interpolants 1) at the start
+        - Add (set-option :certify-interpolants 1) at the start
+        - Add (get-interpolants A B) after (check-sat)
+        - Ensure file ends with LF
+        """
+        import tempfile
+        
+        # Read the original file
+        with open(input_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Create a temporary file for the processed content
+        temp_fd, temp_path = tempfile.mkstemp(suffix='.smt2', prefix='opensmt_')
+        
+        try:
+            with os.fdopen(temp_fd, 'w', encoding='utf-8', newline='\n') as f:
+                # Split content into lines for processing
+                lines = content.split('\n')
+                processed_lines = []
+                
+                # Add the required options at the beginning
+                processed_lines.append('(set-option :produce-interpolants 1)')
+                processed_lines.append('(set-option :certify-interpolants 1)')
+                processed_lines.append('')
+                
+                # Process each line
+                for line in lines:
+                    processed_lines.append(line)
+                    
+                    # If this line contains (check-sat), add the get-interpolants command after it
+                    if '(check-sat)' in line:
+                        processed_lines.append('(get-interpolants A B)')
+                
+                # Join all lines and ensure it ends with LF
+                result_content = '\n'.join(processed_lines)
+                if not result_content.endswith('\n'):
+                    result_content += '\n'
+                
+                f.write(result_content)
+            
+            return temp_path
+            
+        except Exception:
+            # Clean up temp file if something goes wrong
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
+
+    def _postprocess(self, raw_output: str) -> str:
+        """
+        Postprocess OpenSMT output to extract interpolant:
+        - Expects exactly two lines: sat/unsat result and interpolant
+        - Extract interpolant from the second line
+        - Remove outermost brackets if they exist
+        """
+        lines = raw_output.strip().split('\n')
+        
+        # Filter out empty lines
+        non_empty_lines = [line.strip() for line in lines if line.strip()]
+        
+        if len(non_empty_lines) < 2:
+            return None
+        
+        # First line should be sat/unsat, second line should be interpolant
+        interpolant = non_empty_lines[1]
+        
+        # Remove outermost brackets if they exist
+        interpolant = interpolant.strip()
+        if interpolant.startswith('(') and interpolant.endswith(')'):
+            interpolant = interpolant[1:-1]
+        
+        return interpolant.strip()
+
+class Z3(InterpolantSolver):
+    
+    def __init__(self, config_path: str):
+        super().__init__(config_path)
+
+    def _preprocess(self, input_path: str) -> str:
+        #TODO: implement
+        return input_path
+
+    def _postprocess(self, raw_output: str) -> str:
+        # TODO: there will be no postprocessing for z3
+        return raw_output.strip()   
 
 # =========================
 # Verification
@@ -217,6 +395,18 @@ def process_file(path: str, solvers: List[InterpolantSolver]) -> Dict[str, Any]:
                 return result
             print("Both solvers correctly determined SAT (no interpolant needed)")
             result['comparison_result'] = "both_sat_no_interpolant"
+            
+            # Store detailed results for SAT case
+            result['detailed_results'] = {
+                'file_name': file_path.name,
+                'result': result_a,
+                'solver_a_time': time_a,
+                'solver_b_time': time_b,
+                'interpolants_equal': None,  # No interpolants for SAT
+                'solver_a_interpolant': None,
+                'solver_b_interpolant': None
+            }
+            
             result['success'] = True
             return result
         
@@ -302,15 +492,20 @@ def write_results(file_result: Dict[str, Any], solver_csv_writer: csv.writer,
     if file_result['error_message']:
         detailed_file.write(f"Error: {file_result['error_message']}\n")
     
-    # Write detailed results if available (for UNSAT cases)
+    # Write detailed results if available (for both SAT and UNSAT cases)
     if 'detailed_results' in file_result:
         details = file_result['detailed_results']
         detailed_file.write(f"SAT Result: {details['result']}\n")
         detailed_file.write(f"{file_result['solver_a_name']} time: {details['solver_a_time']:.6f}s\n")
         detailed_file.write(f"{file_result['solver_b_name']} time: {details['solver_b_time']:.6f}s\n")
-        detailed_file.write(f"Interpolants equal: {details['interpolants_equal']}\n")
-        detailed_file.write(f"{file_result['solver_a_name']} interpolant: {details['solver_a_interpolant']}\n")
-        detailed_file.write(f"{file_result['solver_b_name']} interpolant: {details['solver_b_interpolant']}\n")
+        
+        # Handle interpolant information (may be None for SAT cases)
+        if details['interpolants_equal'] is not None:
+            detailed_file.write(f"Interpolants equal: {details['interpolants_equal']}\n")
+            detailed_file.write(f"{file_result['solver_a_name']} interpolant: {details['solver_a_interpolant']}\n")
+            detailed_file.write(f"{file_result['solver_b_name']} interpolant: {details['solver_b_interpolant']}\n")
+        else:
+            detailed_file.write("Interpolants: N/A (SAT case)\n")
     
     detailed_file.write("\n")  # Add blank line between entries
     detailed_file.flush()  # Ensure data is written immediately
@@ -453,9 +648,9 @@ def main(argv: List[str]) -> int:
     print(f"Detailed results   : {detailed_results_path}\n")
     
     # Prepare CSV writers and detailed results file
-    with (solver_csv_path.open("w", newline="", encoding="utf-8") as solver_csv_file,
-          comparison_csv_path.open("w", newline="", encoding="utf-8") as comparison_csv_file,
-          detailed_results_path.open("w", encoding="utf-8") as detailed_file):
+    with solver_csv_path.open("w", newline="", encoding="utf-8") as solver_csv_file, \
+         comparison_csv_path.open("w", newline="", encoding="utf-8") as comparison_csv_file, \
+         detailed_results_path.open("w", encoding="utf-8") as detailed_file:
         
         solver_csv_writer = csv.writer(solver_csv_file)
         comparison_csv_writer = csv.writer(comparison_csv_file)
