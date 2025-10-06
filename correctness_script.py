@@ -84,7 +84,7 @@ class InterpolantSolver(ABC):
             else:
                 sat_result = "unknown"
                 interpolant = None
-            
+
             # Clean up temporary file if it was created
             if processed_path != input_path:
                 try:
@@ -126,47 +126,38 @@ class MathSat(InterpolantSolver):
         - Add (get-interpolant (A)) after (check-sat)
         - Replace :named with :interpolation-group
         """
-        import tempfile
-        
         # Read the original file
         with open(input_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # Create a temporary file for the processed content
-        temp_fd, temp_path = tempfile.mkstemp(suffix='.smt2', prefix='mathsat_')
-        
-        try:
-            with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
-                # Split content into lines for processing
-                lines = content.split('\n')
-                processed_lines = []
-                
-                # Add the produce-interpolants option at the beginning
-                processed_lines.append('(set-option :produce-interpolants true)')
-                processed_lines.append('')
-                
-                # Process each line
-                for line in lines:
-                    # Replace :named with :interpolation-group
-                    processed_line = line.replace(':named', ':interpolation-group')
-                    processed_lines.append(processed_line)
-                    
-                    # If this line contains (check-sat), add the get-interpolant command after it
-                    if '(check-sat)' in processed_line:
-                        processed_lines.append('(get-interpolant (A))')
-                
-                # Write all processed lines
-                f.write('\n'.join(processed_lines))
+        # Create a regular, inspectable file next to the input
+        source_path = Path(input_path)
+        timestamp = int(time.time())
+        output_path = source_path.with_name(f"{source_path.stem}.{self.name}_pre_{timestamp}.smt2")
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            # Split content into lines for processing
+            lines = content.split('\n')
+            processed_lines = []
             
-            return temp_path
+            # Add the produce-interpolants option at the beginning
+            processed_lines.append('(set-option :produce-interpolants true)')
+            processed_lines.append('')
             
-        except Exception:
-            # Clean up temp file if something goes wrong
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-            raise
+            # Process each line
+            for line in lines:
+                # Replace :named with :interpolation-group
+                processed_line = line.replace(':named', ':interpolation-group')
+                processed_lines.append(processed_line)
+                
+                # If this line contains (check-sat), add the get-interpolant command after it
+                if '(check-sat)' in processed_line:
+                    processed_lines.append('(get-interpolant (A))')
+            
+            # Write all processed lines
+            f.write('\n'.join(processed_lines))
+
+        return str(output_path)
 
     def _postprocess(self, raw_output: str) -> str:
         """
@@ -236,50 +227,41 @@ class OpenSMT(InterpolantSolver):
         - Add (get-interpolants A B) after (check-sat)
         - Ensure file ends with LF
         """
-        import tempfile
-        
         # Read the original file
         with open(input_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # Create a temporary file for the processed content
-        temp_fd, temp_path = tempfile.mkstemp(suffix='.smt2', prefix='opensmt_')
-        
-        try:
-            with os.fdopen(temp_fd, 'w', encoding='utf-8', newline='\n') as f:
-                # Split content into lines for processing
-                lines = content.split('\n')
-                processed_lines = []
-                
-                # Add the required options at the beginning
-                processed_lines.append('(set-option :produce-interpolants 1)')
-                processed_lines.append('(set-option :certify-interpolants 1)')
-                processed_lines.append('')
-                
-                # Process each line
-                for line in lines:
-                    processed_lines.append(line)
-                    
-                    # If this line contains (check-sat), add the get-interpolants command after it
-                    if '(check-sat)' in line:
-                        processed_lines.append('(get-interpolants A B)')
-                
-                # Join all lines and ensure it ends with LF
-                result_content = '\n'.join(processed_lines)
-                if not result_content.endswith('\n'):
-                    result_content += '\n'
-                
-                f.write(result_content)
+        # Create a regular, inspectable file next to the input
+        source_path = Path(input_path)
+        timestamp = int(time.time())
+        output_path = source_path.with_name(f"{source_path.stem}.{self.name}_pre_{timestamp}.smt2")
+
+        with open(output_path, 'w', encoding='utf-8', newline='\n') as f:
+            # Split content into lines for processing
+            lines = content.split('\n')
+            processed_lines = []
             
-            return temp_path
+            # Add the required options at the beginning
+            processed_lines.append('(set-option :produce-interpolants 1)')
+            processed_lines.append('(set-option :certify-interpolants 1)')
+            processed_lines.append('')
             
-        except Exception:
-            # Clean up temp file if something goes wrong
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-            raise
+            # Process each line
+            for line in lines:
+                processed_lines.append(line)
+                
+                # If this line contains (check-sat), add the get-interpolants command after it
+                if '(check-sat)' in line:
+                    processed_lines.append('(get-interpolants A B)')
+            
+            # Join all lines and ensure it ends with LF
+            result_content = '\n'.join(processed_lines)
+            if not result_content.endswith('\n'):
+                result_content += '\n'
+            
+            f.write(result_content)
+
+        return str(output_path)
 
     def _postprocess(self, raw_output: str) -> str:
         """
@@ -576,9 +558,7 @@ def create_solver(solver_name: str) -> InterpolantSolver:
     elif solver_name == "yaga":
         return Yaga(config_path)
     elif solver_name == "opensmt":
-        # For now, we'll use Yaga as a placeholder for OpenSMT
-        # since OpenSMT class is not implemented yet
-        return Yaga(config_path)
+        return OpenSMT(config_path)
     else:
         raise ValueError(f"Unknown solver: {solver_name}")
 
