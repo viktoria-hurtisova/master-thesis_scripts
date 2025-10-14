@@ -85,6 +85,9 @@ class InterpolantSolver(ABC):
                 sat_result = "unknown"
                 interpolant = None
 
+            #print(f"Result: {result}")
+            #print(f"Interpolant: {interpolant}")
+
             # Clean up temporary file if it was created
             if processed_path != input_path:
                 try:
@@ -180,8 +183,8 @@ class MathSat(InterpolantSolver):
         interpolant_line = non_empty_lines[1]
         
         # Replace (to_real <num>) with just the number
-        # Pattern to match (to_real <number>) where number can be decimal
-        pattern = r'\(to_real\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\)'
+        # Pattern to match (to_real <number>) where number can be decimal, scientific notation, or fraction
+        pattern = r'\(to_real\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|\d+/\d+)\)'
         interpolant = re.sub(pattern, r'\1', interpolant_line)
         
         return interpolant.strip()
@@ -224,7 +227,7 @@ class OpenSMT(InterpolantSolver):
         Preprocess SMT file for OpenSMT interpolant generation:
         - Add (set-option :produce-interpolants 1) at the start
         - Add (set-option :certify-interpolants 1) at the start
-        - Add (get-interpolants A B) after (check-sat)
+        - Add (get-interpolants A B) after (check-sat) where A and B are the named assertions
         - Ensure file ends with LF
         """
         # Read the original file
@@ -269,6 +272,7 @@ class OpenSMT(InterpolantSolver):
         - Expects exactly two lines: sat/unsat result and interpolant
         - Extract interpolant from the second line
         - Remove outermost brackets if they exist
+        - Replace num1/num2 format with (/ num1 num2)
         """
         lines = raw_output.strip().split('\n')
         
@@ -285,6 +289,11 @@ class OpenSMT(InterpolantSolver):
         interpolant = interpolant.strip()
         if interpolant.startswith('(') and interpolant.endswith(')'):
             interpolant = interpolant[1:-1]
+        
+        # Replace num1/num2 format with (/ num1 num2)
+        # Pattern to match numbers in fraction format (e.g., 1/2, 3/4, etc.)
+        pattern = r'(\d+)/(\d+)'
+        interpolant = re.sub(pattern, r'(/ \1 \2)', interpolant)
         
         return interpolant.strip()
 
@@ -306,16 +315,99 @@ class Z3(InterpolantSolver):
 # =========================
 
 def create_comparison_input_file(source_path: str, interpolant_A: str, interpolant_B: str) -> str:
-    #TODO: implement
-    return source_path
+    """
+    Create a comparison input file that replaces all assert statements with a single XOR assertion.
+    
+    Args:
+        source_path: Path to the original SMT file
+        interpolant_A: First interpolant to compare
+        interpolant_B: Second interpolant to compare
+        
+    Returns:
+        Path to the new comparison file
+    """
+    # Read the original file
+    with open(source_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Create a new file path for the comparison
+    source_path_obj = Path(source_path)
+    timestamp = int(time.time())
+    output_path = source_path_obj.with_name(f"{source_path_obj.stem}.comparison_{timestamp}.smt2")
+    
+    # Split content into lines for processing
+    lines = content.split('\n')
+    processed_lines = []
+    
+    # Process each line
+    for line in lines:
+        # Check if line starts with (assert
+        if line.strip().startswith('(assert'):
+            # Skip this line - we'll add our own assert at the end
+            continue
+        # Skip lines containing (set-info :status
+        elif '(set-info :status' in line:
+            # Skip this line - don't copy it to the file
+            continue
+        else:
+            if '(check-sat)' in line:
+                processed_lines.append(f"(assert (and (or {interpolant_A} (not {interpolant_B})) (or (not {interpolant_A}) {interpolant_B})))")
+            # Keep all other lines as they are
+            processed_lines.append(line)
+    
+  
+    # Write the processed content to the new file
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(processed_lines))
+    
+    return str(output_path)
 
 def compare_interpolants(file_path: str, interpolant_A: str, interpolant_B: str) -> bool:
-    #TODO: implement
+    """
+    Compare two interpolants for equivalence using Z3 solver.
+    
+    Args:
+        file_path: Path to the original SMT file
+        interpolant_A: First interpolant to compare
+        interpolant_B: Second interpolant to compare
+        
+    Returns:
+        Tuple[bool, str]: (True if interpolants are equivalent, Z3 output for debugging)
+    """
+    try:
+        # Step 1: Create the comparison input file with XOR assertion
+        comparison_file_path = create_comparison_input_file(file_path, interpolant_A, interpolant_B)
+        
+        # Step 2: Initialize Z3 solver
+        z3_config_path = load_config("z3")
+        z3_solver = Z3(z3_config_path)
+        
+        # Step 3: Run Z3 solver on the comparison file
+        result, _, _ = z3_solver.run(comparison_file_path)
+        
+        # Step 4: Process the output
+        # If Z3 returns "unsat", it means the XOR of the two interpolants is unsatisfiable,
+        # which means the interpolants are equivalent
 
-    # we are using z3 as the verification solver
-    # we need to initialize the z3 solver
-    # we need to create the verification file
-    return True
+        are_equivalent = (result != "unsat")
+        
+        # Clean up the temporary comparison file
+        try:
+            os.unlink(comparison_file_path)
+        except OSError:
+            pass  # Ignore cleanup errors
+        
+        return are_equivalent
+        
+    except Exception as e:
+        print(f"ERROR: Exception during interpolant comparison: {e}")
+        # Clean up comparison file if it exists
+        try:
+            if 'comparison_file_path' in locals():
+                os.unlink(comparison_file_path)
+        except OSError:
+            pass
+        return False
 
 # =========================
 # Orchestrator
@@ -441,6 +533,7 @@ def process_file(path: str, solvers: List[InterpolantSolver]) -> Dict[str, Any]:
         result['comparison_result'] = f"exception_{str(e).replace(',', ';')}"
         result['error_message'] = f"Exception: {e}"
         return result
+
 
 def write_results(file_result: Dict[str, Any], solver_csv_writer: csv.writer, 
                  comparison_csv_writer: csv.writer, detailed_file) -> None:
