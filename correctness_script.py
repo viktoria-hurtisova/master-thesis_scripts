@@ -38,9 +38,13 @@ class InterpolantSolver(ABC):
         self.solver_path = config.get('solver_path', '')
         self.pass_via_stdin = config.get('pass_via_stdin', False)
 
-    def run(self, input_path: str) -> Tuple[str, str, float]:
+    def run(self, input_path: str, timeout: int = 900) -> Tuple[str, str, float]:
         """
         Run the solver on the input file and return result, interpolant, and time.
+        
+        Args:
+            input_path: Path to the input SMT file
+            timeout: Timeout in seconds (default: 900 = 15 minutes)
         
         Returns:
             Tuple[str, str, float]: (sat/unsat result, interpolant or None, execution time)
@@ -60,14 +64,16 @@ class InterpolantSolver(ABC):
                         stdin=fp,
                         capture_output=True,
                         text=True,
-                        check=False
+                        check=False,
+                        timeout=timeout
                     )
             else:
                 result = subprocess.run(
                     [self.solver_path, processed_path],
                     capture_output=True,
                     text=True,
-                    check=False
+                    check=False,
+                    timeout=timeout
                 )
             
             elapsed = time.perf_counter() - start_time
@@ -97,6 +103,9 @@ class InterpolantSolver(ABC):
             
             return sat_result, interpolant, elapsed
             
+        except subprocess.TimeoutExpired as e:
+            elapsed = time.perf_counter() - start_time
+            raise RuntimeError(f"Solver execution timed out after {timeout} seconds: {e}") from e
         except Exception as e:
             elapsed = time.perf_counter() - start_time
             raise RuntimeError(f"Solver execution failed: {e}") from e
@@ -362,7 +371,7 @@ def create_comparison_input_file(source_path: str, interpolant_A: str, interpola
     
     return str(output_path)
 
-def compare_interpolants(file_path: str, interpolant_A: str, interpolant_B: str) -> bool:
+def compare_interpolants(file_path: str, interpolant_A: str, interpolant_B: str, timeout: int = 900) -> bool:
     """
     Compare two interpolants for equivalence using Z3 solver.
     
@@ -383,7 +392,7 @@ def compare_interpolants(file_path: str, interpolant_A: str, interpolant_B: str)
         z3_solver = Z3(z3_config_path)
         
         # Step 3: Run Z3 solver on the comparison file
-        result, _, _ = z3_solver.run(comparison_file_path)
+        result, _, _ = z3_solver.run(comparison_file_path, timeout)
         
         # Step 4: Process the output
         # If Z3 returns "unsat", it means the XOR of the two interpolants is unsatisfiable,
@@ -413,7 +422,7 @@ def compare_interpolants(file_path: str, interpolant_A: str, interpolant_B: str)
 # Orchestrator
 # =========================
 
-def process_file(path: str, solvers: List[InterpolantSolver]) -> Dict[str, Any]:
+def process_file(path: str, solvers: List[InterpolantSolver], timeout: int = 900) -> Dict[str, Any]:
     """
     Process a single SMT file with multiple solvers and return results.
     
@@ -440,10 +449,10 @@ def process_file(path: str, solvers: List[InterpolantSolver]) -> Dict[str, Any]:
     try:
         # Run both solvers on the input file
         print(f"Running {solver_a.name}...")
-        result_a, interpolant_a, time_a = solver_a.run(path)
+        result_a, interpolant_a, time_a = solver_a.run(path, timeout)
         
         print(f"Running {solver_b.name}...")
-        result_b, interpolant_b, time_b = solver_b.run(path)
+        result_b, interpolant_b, time_b = solver_b.run(path, timeout)
         
         print(f"Results: {solver_a.name}={result_a} ({time_a:.3f}s), {solver_b.name}={result_b} ({time_b:.3f}s)")
         
@@ -500,7 +509,7 @@ def process_file(path: str, solvers: List[InterpolantSolver]) -> Dict[str, Any]:
             # Compare the interpolants
             print("Comparing interpolants...")
             
-            are_equal = compare_interpolants(path, interpolant_a, interpolant_b)
+            are_equal = compare_interpolants(path, interpolant_a, interpolant_b, timeout)
             result['comparison_result'] = str(are_equal).lower()
             
             if are_equal:
@@ -679,6 +688,12 @@ def main(argv: List[str]) -> int:
         "-o", "--output", 
         help="Output directory for results (default: creates 'results' folder in current directory)"
     )
+    parser.add_argument(
+        "-t", "--timeout", 
+        type=int, 
+        default=900,
+        help="Timeout in seconds for each solver execution (default: 900 = 15 minutes)"
+    )
     
     args = parser.parse_args(argv)
     
@@ -716,6 +731,7 @@ def main(argv: List[str]) -> int:
     print(f"Input files        : {len(input_files)} files")
     print(f"Output directory   : {output_dir}")
     print(f"Run number         : {run_number}")
+    print(f"Timeout per solver : {args.timeout} seconds ({args.timeout/60:.1f} minutes)")
     print(f"Solver runs CSV    : {solver_csv_path}")
     print(f"Comparison CSV     : {comparison_csv_path}")
     print(f"Detailed results   : {detailed_results_path}\n")
@@ -745,7 +761,7 @@ def main(argv: List[str]) -> int:
             print(f"=== Processing {smt_file.name} ===")
             
             # Process the file and get results
-            file_result = process_file(str(smt_file), [solver1, solver2])
+            file_result = process_file(str(smt_file), [solver1, solver2], args.timeout)
             
             # Write results to CSV files and detailed results file
             write_results(file_result, solver_csv_writer, comparison_csv_writer, detailed_file)
