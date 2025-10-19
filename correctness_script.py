@@ -204,14 +204,42 @@ class Yaga(InterpolantSolver):
         super().__init__(config_path)
 
     def _preprocess(self, input_path: str) -> str:
-        #TODO: implement
-        return input_path
+        """
+        Preprocess SMT file for Yaga interpolant generation:
+        - Copy all lines from the original file
+        - Add (get-interpolant A B) after (check-sat)
+        """
+        # Read the original file
+        with open(input_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Create a regular, inspectable file next to the input
+        source_path = Path(input_path)
+        timestamp = int(time.time())
+        output_path = source_path.with_name(f"{source_path.stem}.{self.name}_pre_{timestamp}.smt2")
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            # Split content into lines for processing
+            lines = content.split('\n')
+            processed_lines = []
+            
+            # Process each line
+            for line in lines:
+                processed_lines.append(line)
+                
+                # If this line contains (check-sat), add the get-interpolant command after it
+                if '(check-sat)' in line:
+                    processed_lines.append('(get-interpolant A B)')
+            
+            # Write all processed lines
+            f.write('\n'.join(processed_lines))
+
+        return str(output_path)
 
     def _postprocess(self, raw_output: str) -> str:
         """
         Postprocess Yaga output to extract interpolant:
-        - Expects exactly two lines: sat/unsat result and interpolant
-        - Extract interpolant from the second line
+        - Returns the second line from the input
         """
         lines = raw_output.strip().split('\n')
         
@@ -221,10 +249,8 @@ class Yaga(InterpolantSolver):
         if len(non_empty_lines) < 2:
             return None
         
-        # First line should be sat/unsat, second line should be interpolant
-        interpolant = non_empty_lines[1]
-        
-        return interpolant.strip()
+        # Return the second line
+        return non_empty_lines[1].strip()
 
 class OpenSMT(InterpolantSolver):
     
