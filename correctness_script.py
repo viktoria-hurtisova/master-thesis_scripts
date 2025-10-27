@@ -78,6 +78,17 @@ class InterpolantSolver(ABC):
             
             elapsed = time.perf_counter() - start_time
             
+            # Check for errors in stderr
+            if result.stderr and result.stderr.strip():
+                error_msg = f"{self.name} produced error output: {result.stderr}"
+                # Clean up temporary file if it was created
+                if processed_path != input_path:
+                    try:
+                        os.unlink(processed_path)
+                    except OSError:
+                        pass
+                raise RuntimeError(error_msg)
+            
             # Parse the result
             stdout_lower = result.stdout.lower()
             if "unsat" in stdout_lower:
@@ -90,9 +101,6 @@ class InterpolantSolver(ABC):
             else:
                 sat_result = "unknown"
                 interpolant = None
-
-            #print(f"Result: {result}")
-            #print(f"Interpolant: {interpolant}")
 
             # Clean up temporary file if it was created
             if processed_path != input_path:
@@ -435,14 +443,14 @@ def compare_interpolants(file_path: str, interpolant_A: str, interpolant_B: str,
         return are_equivalent
         
     except Exception as e:
-        print(f"ERROR: Exception during interpolant comparison: {e}")
+        error_msg = f"Exception during interpolant comparison: {e}"
         # Clean up comparison file if it exists
         try:
             if 'comparison_file_path' in locals():
                 os.unlink(comparison_file_path)
         except OSError:
             pass
-        return False
+        raise RuntimeError(error_msg)
 
 # =========================
 # Orchestrator
@@ -564,9 +572,8 @@ def process_file(path: str, solvers: List[InterpolantSolver], timeout: int = 900
         return result
         
     except Exception as e:
-        print(f"ERROR: Exception during processing: {e}")
         result['comparison_result'] = f"exception_{str(e).replace(',', ';')}"
-        result['error_message'] = f"Exception: {e}"
+        result['error_message'] = f"Exception during processing: {e}"
         return result
 
 
