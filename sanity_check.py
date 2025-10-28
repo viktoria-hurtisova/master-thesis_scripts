@@ -14,13 +14,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
-# notes
-#  you can form a new formula by XORing them together (φ₁ ⊕ φ₂) 
-# and then use a SAT (Satisfiability) solver to check 
-# if this new formula is unsatisfiable. If φ₁ ⊕ φ₂ is unsatisfiable, 
-# it means there's no truth assignment that makes the formulas differ, 
-# thus they are equivalent
-
 class InterpolantSolver(ABC):
     """
     Base interface for interpolant-producing solvers.
@@ -77,6 +70,18 @@ class InterpolantSolver(ABC):
                 )
             
             elapsed = time.perf_counter() - start_time
+            
+            # Check for errors in stderr
+            if result.stderr and result.stderr.strip():
+                error_msg = f"{self.name} produced error output: {result.stderr}"
+                print(error_msg)
+                # Clean up temporary file if it was created
+                if processed_path != input_path:
+                    try:
+                        os.unlink(processed_path)
+                    except OSError:
+                        pass
+                raise RuntimeError(error_msg)
             
             # Parse the result
             stdout_lower = result.stdout.lower()
@@ -338,7 +343,7 @@ class Z3(InterpolantSolver):
         super().__init__(config_path)
 
     def _preprocess(self, input_path: str) -> str:
-        #TODO: implement
+        #TODO: there will be no preprocessing for z3
         return input_path
 
     def _postprocess(self, raw_output: str) -> str:
@@ -362,9 +367,10 @@ def _strip_named_wrapper(assert_body: str) -> str:
 
 def create_verification_input_file(source_path: str, interpolant: str) -> str:
     """
-    Create a verification SMT-LIB file that checks Craig's interpolant conditions for a single interpolant I:
-      1) ¬A v I is sat (i.e., A ⇒ I)
-      2) ¬I v ¬B is sat (i.e., I ⇒ ¬B)
+    Create a verification SMT-LIB file that checks Craig's interpolant conditions for a single interpolant I.
+    If SAT, I is NOT a valid interpolant; if UNSAT, I IS a valid interpolant:
+      1) A ∧ ¬I (counterexample to A ⇒ I)
+      2) I ∧ B (counterexample to I ⇒ ¬B)
     The function extracts A and B from the original file using :named or :interpolation-group attributes.
     """
     with open(source_path, 'r', encoding='utf-8') as f:
@@ -405,10 +411,11 @@ def create_verification_input_file(source_path: str, interpolant: str) -> str:
         if '(check-sat' in stripped:
             # we'll add our own checks later
             continue
+        if '(exit)' in stripped:
+            continue
         processed_lines.append(line)
 
-    processed_lines.append(f'(assert (or (not {a_formula}) {interpolant}))')
-    processed_lines.append(f'(assert (or (not {interpolant}) (not {b_formula})))')
+    processed_lines.append(f'(assert (or (and {a_formula} (not {interpolant})) (and {interpolant} {b_formula})))')
     processed_lines.append('(check-sat)')
     processed_lines.append('(exit)')
 
@@ -417,42 +424,48 @@ def create_verification_input_file(source_path: str, interpolant: str) -> str:
     
     return str(output_path)
 
-def verify_interpolant(file_path: str, interpolant: str, timeout: int = 900) -> bool:
+def verify_interpolant(file_path: str, interpolant: str, timeout: int = 900) -> Tuple[bool, Optional[str]]:
     """
     Verify a single interpolant against Craig's conditions using Z3 by checking:
-      (¬A v I) ∧ (¬I v ¬B) is sat (i.e., A ⇒ I ∧ I ⇒ ¬B)
+      (A ∧ ¬I) v (I ∧ B) is UNSAT (there is no counterexample to A ⇒ I ∧ I ⇒ ¬B)
 
-    Returns True if the formula satisfies Craig's conditions.
+    Returns tuple (is_verified, z3_output) where z3_output contains stdout and stderr.
     """
+    z3_output = None
     try:
         verification_file_path = create_verification_input_file(file_path, interpolant)
         z3_config_path = load_config("z3")
         z3_solver = Z3(z3_config_path)
         
-        # Step 3: Run Z3 solver on the verification file
-        result, _, _ = z3_solver.run(verification_file_path, timeout)
+        # Use solver.run to execute the verification
+        sat_result, _, _ = z3_solver.run(verification_file_path, timeout)
         
-        # Step 4: Process the output
-        # If Z3 returns "sat", it means the Craig's conditions are satisfied
+        # Verify that there is no counterexample to A ⇒ I ∧ I ⇒ ¬B	
+        is_verified = (sat_result == "unsat")
+        print(f"Verification result: {sat_result}")
         
-        is_verified = (result == "sat")
+        # Try to capture output for debugging if we need it
+        # Since solver.run doesn't return the raw output, we set z3_output to None for now
+        z3_output = None
         
-        # Clean up the temporary verification file
+        # Clean up the verification file
         try:
             os.unlink(verification_file_path)
         except OSError:
             pass  # Ignore cleanup errors
         
-        return is_verified
+        return is_verified, z3_output
         
     except Exception as e:
-        print(f"ERROR: Exception during interpolant verification: {e}")
+        error_msg = f"Exception during interpolant verification: {e}"
         try:
             if 'verification_file_path' in locals():
                 os.unlink(verification_file_path)
         except OSError:
             pass
-        return False
+        if z3_output is None:
+            z3_output = f"Exception during verification: {str(e)}"
+        raise RuntimeError(error_msg)
 
 # =========================
 # Orchestrator
@@ -505,15 +518,18 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 900) -> Di
                 return result
             # Verify interpolant
             print("Verifying interpolant...")
-            is_verified = verify_interpolant(path, interpolant, timeout)
+            is_verified, z3_output = verify_interpolant(path, interpolant, timeout)
             result['verification_result'] = 'verified' if is_verified else 'not_verified'
-            print("Interpolant is verified" if is_verified else "Interpolant is NOT VERIFIED")
+            print(f"Interpolant is verified: {is_verified}")
             result['detailed_results'] = {
                 'file_name': file_path.name,
                 'result': sat_res,
                 'solver_time': run_time,
                 'interpolant': interpolant
             }
+            # Store z3 output if verification failed
+            if not is_verified and z3_output:
+                result['z3_verification_output'] = z3_output
             result['success'] = True
             return result
 
@@ -523,33 +539,24 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 900) -> Di
         return result
 
     except Exception as e:
-        print(f"ERROR: Exception during processing: {e}")
-        result['verification_result'] = f"exception_{str(e).replace(',', ';')}"
-        result['error_message'] = f"Exception: {e}"
+        result['verification_result'] = f"exception_{str(e).replace(',', ';')}" 
+        result['error_message'] = f"Exception during processing: {e}"
         return result
 
 
 def write_results(file_result: Dict[str, Any], solver_csv_writer: csv.writer, 
-                 verification_csv_writer: csv.writer, detailed_file) -> None:
+                 detailed_file) -> None:
     """
-    Write the results from process_file to CSV files and append to detailed results file.
+    Write the results from process_file to CSV file and append to detailed results file.
     
     Args:
         file_result: Dictionary containing all results from process_file
-        solver_csv_writer: CSV writer for individual solver runs
-        verification_csv_writer: CSV writer for interpolant verifications
+        solver_csv_writer: CSV writer for solver runs with verification results
         detailed_file: Open file handle for detailed results
     """
-    # Write solver runs to CSV
+    # Write solver runs to CSV with verification result
     for run in file_result['solver_runs']:
-        solver_csv_writer.writerow([run['solver'], run['input_file'], run['time_seconds'], run['result']])
-    
-    # Write verification result to CSV
-    verification_csv_writer.writerow([
-        file_result['file_name'], 
-        file_result['solver_name'], 
-        file_result['verification_result']
-    ])
+        solver_csv_writer.writerow([run['solver'], run['input_file'], run['time_seconds'], file_result['verification_result']])
     
     # Write to detailed results file
     detailed_file.write(f"=== {file_result['file_name']} ===\n")
@@ -566,6 +573,12 @@ def write_results(file_result: Dict[str, Any], solver_csv_writer: csv.writer,
         detailed_file.write(f"SAT Result: {details['result']}\n")
         detailed_file.write(f"{file_result['solver_name']} time: {details['solver_time']:.6f}s\n")
         detailed_file.write(f"Interpolant: {details['interpolant']}\n")
+    
+    # Write z3 verification output if interpolant was not verified
+    if file_result['verification_result'] == 'not_verified' and 'z3_verification_output' in file_result:
+        detailed_file.write("\n--- Z3 Verification Output ---\n")
+        detailed_file.write(file_result['z3_verification_output'])
+        detailed_file.write("\n")
     
     detailed_file.write("\n")  # Add blank line between entries
     detailed_file.flush()  # Ensure data is written immediately
@@ -690,8 +703,7 @@ def main(argv: List[str]) -> int:
     run_number = get_next_run_number(output_dir)
     
     # Set up output file paths with run numbers
-    solver_csv_path = output_dir / f"correctness_solver_runs_run_{run_number}.csv"
-    verification_csv_path = output_dir / f"correctness_verification_run_{run_number}.csv"
+    solver_csv_path = output_dir / f"sanity_check_result_{run_number}.csv"
     detailed_results_path = output_dir / f"detailed_results_run_{run_number}.txt"
     
     print(f"Verifying solver   : {args.solver}")
@@ -699,21 +711,17 @@ def main(argv: List[str]) -> int:
     print(f"Output directory   : {output_dir}")
     print(f"Run number         : {run_number}")
     print(f"Timeout per solver : {args.timeout} seconds ({args.timeout/60:.1f} minutes)")
-    print(f"Solver runs CSV    : {solver_csv_path}")
-    print(f"Verification CSV   : {verification_csv_path}")
+    print(f"Results CSV        : {solver_csv_path}")
     print(f"Detailed results   : {detailed_results_path}\n")
     
-    # Prepare CSV writers and detailed results file
+    # Prepare CSV writer and detailed results file
     with solver_csv_path.open("w", newline="", encoding="utf-8") as solver_csv_file, \
-         verification_csv_path.open("w", newline="", encoding="utf-8") as verification_csv_file, \
          detailed_results_path.open("w", encoding="utf-8") as detailed_file:
         
         solver_csv_writer = csv.writer(solver_csv_file)
-        verification_csv_writer = csv.writer(verification_csv_file)
         
         # Always write headers since we're creating new files
-        solver_csv_writer.writerow(["solver", "input_file", "time_seconds", "result"])
-        verification_csv_writer.writerow(["file_name", "solver", "verification_result"])
+        solver_csv_writer.writerow(["solver", "input_file", "time_seconds", "verification_result"])
         
         # Write header to detailed results file
         detailed_file.write(f"Detailed Results - Run {run_number}\n")
@@ -726,16 +734,16 @@ def main(argv: List[str]) -> int:
         # Process each file
         for smt_file in input_files:
             print(f"=== Processing {smt_file.name} ===")
+            print(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
             
             # Process the file and get results
             file_result = process_file(str(smt_file), solver_inst, args.timeout)
             
-            # Write results to CSV files and detailed results file
-            write_results(file_result, solver_csv_writer, verification_csv_writer, detailed_file)
+            # Write results to CSV file and detailed results file
+            write_results(file_result, solver_csv_writer, detailed_file)
             
-            # Flush CSV files after each file
+            # Flush CSV file after each file
             solver_csv_file.flush()
-            verification_csv_file.flush()
             
             # Track failures and provide feedback
             if not file_result['success']:
