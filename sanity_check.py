@@ -43,6 +43,7 @@ class InterpolantSolver(ABC):
             Tuple[str, str, float]: (sat/unsat result, interpolant or None, execution time)
         """
         
+        processed_path = input_path  # Initialize to avoid undefined variable in finally
         try:
             # Preprocess the input file for this solver
             processed_path = self._preprocess(input_path)
@@ -70,17 +71,11 @@ class InterpolantSolver(ABC):
                 )
             
             elapsed = time.perf_counter() - start_time
-            
+            print(f"Result: {result}")
             # Check for errors in stderr
             if result.stderr and result.stderr.strip():
                 error_msg = f"{self.name} produced error output: {result.stderr}"
                 print(error_msg)
-                # Clean up temporary file if it was created
-                if processed_path != input_path:
-                    try:
-                        os.unlink(processed_path)
-                    except OSError:
-                        pass
                 raise RuntimeError(error_msg)
             
             # Parse the result
@@ -96,16 +91,6 @@ class InterpolantSolver(ABC):
                 sat_result = "unknown"
                 interpolant = None
 
-            #print(f"Result: {result}")
-            #print(f"Interpolant: {interpolant}")
-
-            # Clean up temporary file if it was created
-            if processed_path != input_path:
-                try:
-                    os.unlink(processed_path)
-                except OSError:
-                    pass  # Ignore cleanup errors
-            
             return sat_result, interpolant, elapsed
             
         except subprocess.TimeoutExpired as e:
@@ -114,6 +99,13 @@ class InterpolantSolver(ABC):
         except Exception as e:
             elapsed = time.perf_counter() - start_time
             raise RuntimeError(f"Solver execution failed: {e}") from e
+        finally:
+            # Clean up temporary file if it was created (happens regardless of success/failure)
+            if processed_path != input_path:
+                try:
+                    os.unlink(processed_path)
+                except OSError:
+                    pass  # Ignore cleanup errors
 
     @abstractmethod
     def _preprocess(self, input_path: str) -> str:
@@ -430,8 +422,12 @@ def verify_interpolant(file_path: str, interpolant: str, timeout: int = 900) -> 
       (A ∧ ¬I) v (I ∧ B) is UNSAT (there is no counterexample to A ⇒ I ∧ I ⇒ ¬B)
 
     Returns tuple (is_verified, z3_output) where z3_output contains stdout and stderr.
+    
+    Raises:
+        RuntimeError: If Z3 execution fails
     """
     z3_output = None
+    verification_file_path = None
     try:
         verification_file_path = create_verification_input_file(file_path, interpolant)
         z3_config_path = load_config("z3")
@@ -440,6 +436,7 @@ def verify_interpolant(file_path: str, interpolant: str, timeout: int = 900) -> 
         # Use solver.run to execute the verification
         sat_result, _, _ = z3_solver.run(verification_file_path, timeout)
         
+
         # Verify that there is no counterexample to A ⇒ I ∧ I ⇒ ¬B	
         is_verified = (sat_result == "unsat")
         print(f"Verification result: {sat_result}")
@@ -448,24 +445,20 @@ def verify_interpolant(file_path: str, interpolant: str, timeout: int = 900) -> 
         # Since solver.run doesn't return the raw output, we set z3_output to None for now
         z3_output = None
         
-        # Clean up the verification file
-        try:
-            os.unlink(verification_file_path)
-        except OSError:
-            pass  # Ignore cleanup errors
-        
         return is_verified, z3_output
         
     except Exception as e:
-        error_msg = f"Exception during interpolant verification: {e}"
-        try:
-            if 'verification_file_path' in locals():
+        error_msg = f"Z3 verification failed: {str(e)}"
+        
+        # Re-raise the exception so it can be caught in process_file
+        raise RuntimeError(error_msg) from e
+    finally:
+        #pass
+        if verification_file_path:
+            try:
                 os.unlink(verification_file_path)
-        except OSError:
-            pass
-        if z3_output is None:
-            z3_output = f"Exception during verification: {str(e)}"
-        raise RuntimeError(error_msg)
+            except OSError:
+                pass
 
 # =========================
 # Orchestrator
@@ -517,27 +510,55 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 900) -> Di
                 result['error_message'] = f"{solver.name} did not produce an interpolant"
                 return result
             # Verify interpolant
+            print(f"Interpolant: {interpolant}")
             print("Verifying interpolant...")
-            is_verified, z3_output = verify_interpolant(path, interpolant, timeout)
-            result['verification_result'] = 'verified' if is_verified else 'not_verified'
-            print(f"Interpolant is verified: {is_verified}")
-            result['detailed_results'] = {
-                'file_name': file_path.name,
-                'result': sat_res,
-                'solver_time': run_time,
-                'interpolant': interpolant
-            }
-            # Store z3 output if verification failed
-            if not is_verified and z3_output:
-                result['z3_verification_output'] = z3_output
-            result['success'] = True
-            return result
+            try:
+                is_verified, z3_output = verify_interpolant(path, interpolant, timeout)
+                result['verification_result'] = 'verified' if is_verified else 'not_verified'
+                print(f"Interpolant is verified: {is_verified}")
+                result['detailed_results'] = {
+                    'file_name': file_path.name,
+                    'result': sat_res,
+                    'solver_time': run_time,
+                    'interpolant': interpolant
+                }
+                # Store z3 output if verification failed
+                if not is_verified and z3_output:
+                    result['z3_verification_output'] = z3_output
+                result['success'] = True
+                return result
+            except Exception as e:
+                result['verification_result'] = 'z3_error'
+                result['error_message'] = f"Z3 verification failed: {e}"
+                result['z3_verification_output'] = str(e)
+                result['detailed_results'] = {
+                    'file_name': file_path.name,
+                    'result': sat_res,
+                    'solver_time': run_time,
+                    'interpolant': interpolant
+                }
+                return result
 
         # Unknown
         result['verification_result'] = f"unknown_result_{sat_res}"
         result['error_message'] = f"Unknown result: {sat_res}"
         return result
 
+    except subprocess.TimeoutExpired as e:
+        # Handle timeout from solver execution
+        result['verification_result'] = 'solver_timed_out'
+        result['error_message'] = f"Solver execution timed out after {timeout} seconds"
+        return result
+    except RuntimeError as e:
+        # Check if the runtime error is a wrapped timeout
+        if "timed out" in str(e):
+            result['verification_result'] = 'solver_timed_out'
+            result['error_message'] = str(e)
+            return result
+        # Other runtime errors
+        result['verification_result'] = f"exception_{str(e).replace(',', ';')}" 
+        result['error_message'] = f"Exception during processing: {e}"
+        return result
     except Exception as e:
         result['verification_result'] = f"exception_{str(e).replace(',', ';')}" 
         result['error_message'] = f"Exception during processing: {e}"
@@ -554,9 +575,20 @@ def write_results(file_result: Dict[str, Any], solver_csv_writer: csv.writer,
         solver_csv_writer: CSV writer for solver runs with verification results
         detailed_file: Open file handle for detailed results
     """
-    # Write solver runs to CSV with verification result
+    # Write solver runs to CSV with verification result and interpolant (if available)
+    interpolant_value = ""
+    if 'detailed_results' in file_result and isinstance(file_result['detailed_results'], dict):
+        interpolant_value = file_result['detailed_results'].get('interpolant', "")
+        if interpolant_value is None:
+            interpolant_value = ""
     for run in file_result['solver_runs']:
-        solver_csv_writer.writerow([run['solver'], run['input_file'], run['time_seconds'], file_result['verification_result']])
+        solver_csv_writer.writerow([
+            run['solver'],
+            run['input_file'],
+            run['time_seconds'],
+            file_result['verification_result'],
+            interpolant_value
+        ])
     
     # Write to detailed results file
     detailed_file.write(f"=== {file_result['file_name']} ===\n")
@@ -577,6 +609,12 @@ def write_results(file_result: Dict[str, Any], solver_csv_writer: csv.writer,
     # Write z3 verification output if interpolant was not verified
     if file_result['verification_result'] == 'not_verified' and 'z3_verification_output' in file_result:
         detailed_file.write("\n--- Z3 Verification Output ---\n")
+        detailed_file.write(file_result['z3_verification_output'])
+        detailed_file.write("\n")
+    
+    # Write z3 error if Z3 verification failed
+    if file_result['verification_result'] == 'z3_error' and 'z3_verification_output' in file_result:
+        detailed_file.write("\n--- Z3 Verification Error ---\n")
         detailed_file.write(file_result['z3_verification_output'])
         detailed_file.write("\n")
     
@@ -708,6 +746,7 @@ def main(argv: List[str]) -> int:
     
     print(f"Verifying solver   : {args.solver}")
     print(f"Input files        : {len(input_files)} files")
+    print(f"Processing files in: {args.inputs}")
     print(f"Output directory   : {output_dir}")
     print(f"Run number         : {run_number}")
     print(f"Timeout per solver : {args.timeout} seconds ({args.timeout/60:.1f} minutes)")
@@ -721,7 +760,7 @@ def main(argv: List[str]) -> int:
         solver_csv_writer = csv.writer(solver_csv_file)
         
         # Always write headers since we're creating new files
-        solver_csv_writer.writerow(["solver", "input_file", "time_seconds", "verification_result"])
+        solver_csv_writer.writerow(["solver", "input_file", "time_seconds", "verification_result", "interpolant"])
         
         # Write header to detailed results file
         detailed_file.write(f"Detailed Results - Run {run_number}\n")
