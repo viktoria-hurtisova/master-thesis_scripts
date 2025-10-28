@@ -14,13 +14,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
-# notes
-#  you can form a new formula by XORing them together (φ₁ ⊕ φ₂) 
-# and then use a SAT (Satisfiability) solver to check 
-# if this new formula is unsatisfiable. If φ₁ ⊕ φ₂ is unsatisfiable, 
-# it means there's no truth assignment that makes the formulas differ, 
-# thus they are equivalent
-
 class InterpolantSolver(ABC):
     """
     Base interface for interpolant-producing solvers.
@@ -50,6 +43,7 @@ class InterpolantSolver(ABC):
             Tuple[str, str, float]: (sat/unsat result, interpolant or None, execution time)
         """
         
+        processed_path = input_path  # Initialize to avoid undefined variable in finally
         try:
             # Preprocess the input file for this solver
             processed_path = self._preprocess(input_path)
@@ -78,15 +72,13 @@ class InterpolantSolver(ABC):
             
             elapsed = time.perf_counter() - start_time
             
+            # Store output for debugging
+            self._last_stdout = result.stdout
+            self._last_stderr = result.stderr
+            
             # Check for errors in stderr
             if result.stderr and result.stderr.strip():
                 error_msg = f"{self.name} produced error output: {result.stderr}"
-                # Clean up temporary file if it was created
-                if processed_path != input_path:
-                    try:
-                        os.unlink(processed_path)
-                    except OSError:
-                        pass
                 raise RuntimeError(error_msg)
             
             # Parse the result
@@ -101,13 +93,6 @@ class InterpolantSolver(ABC):
             else:
                 sat_result = "unknown"
                 interpolant = None
-
-            # Clean up temporary file if it was created
-            if processed_path != input_path:
-                try:
-                    os.unlink(processed_path)
-                except OSError:
-                    pass  # Ignore cleanup errors
             
             return sat_result, interpolant, elapsed
             
@@ -117,6 +102,13 @@ class InterpolantSolver(ABC):
         except Exception as e:
             elapsed = time.perf_counter() - start_time
             raise RuntimeError(f"Solver execution failed: {e}") from e
+        finally:
+            # Clean up temporary file if it was created (happens regardless of success/failure)
+            if processed_path != input_path:
+                try:
+                    os.unlink(processed_path)
+                except OSError:
+                    pass  # Ignore cleanup errors
 
     @abstractmethod
     def _preprocess(self, input_path: str) -> str:
@@ -531,11 +523,21 @@ def process_file(path: str, solvers: List[InterpolantSolver], timeout: int = 900
         if result_a == "unsat":
             if interpolant_a is None:
                 print(f"ERROR: {solver_a.name} did not produce an interpolant for UNSAT formula")
+                # Print full solver output for debugging
+                print(f"\n=== Full {solver_a.name} stdout ===")
+                print(solver_a._last_stdout if hasattr(solver_a, '_last_stdout') else 'N/A')
+                print(f"\n=== Full {solver_a.name} stderr ===")
+                print(solver_a._last_stderr if hasattr(solver_a, '_last_stderr') else 'N/A')
                 result['comparison_result'] = f"no_interpolant_from_{solver_a.name}"
                 result['error_message'] = f"{solver_a.name} did not produce an interpolant"
                 return result
             if interpolant_b is None:
                 print(f"ERROR: {solver_b.name} did not produce an interpolant for UNSAT formula")
+                # Print full solver output for debugging
+                print(f"\n=== Full {solver_b.name} stdout ===")
+                print(solver_b._last_stdout if hasattr(solver_b, '_last_stdout') else 'N/A')
+                print(f"\n=== Full {solver_b.name} stderr ===")
+                print(solver_b._last_stderr if hasattr(solver_b, '_last_stderr') else 'N/A')
                 result['comparison_result'] = f"no_interpolant_from_{solver_b.name}"
                 result['error_message'] = f"{solver_b.name} did not produce an interpolant"
                 return result
@@ -767,7 +769,8 @@ def main(argv: List[str]) -> int:
     print(f"Timeout per solver : {args.timeout} seconds ({args.timeout/60:.1f} minutes)")
     print(f"Solver runs CSV    : {solver_csv_path}")
     print(f"Comparison CSV     : {comparison_csv_path}")
-    print(f"Detailed results   : {detailed_results_path}\n")
+    print(f"Detailed results   : {detailed_results_path}")
+    print(f"Processing files in: {args.inputs}\n")
     
     # Prepare CSV writers and detailed results file
     with solver_csv_path.open("w", newline="", encoding="utf-8") as solver_csv_file, \
@@ -792,6 +795,7 @@ def main(argv: List[str]) -> int:
         # Process each file
         for smt_file in input_files:
             print(f"=== Processing {smt_file.name} ===")
+            print(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
             
             # Process the file and get results
             file_result = process_file(str(smt_file), [solver1, solver2], args.timeout)
