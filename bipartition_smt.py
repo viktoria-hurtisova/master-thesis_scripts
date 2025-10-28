@@ -119,8 +119,6 @@ def split_conjuncts(body: str) -> Tuple[str, str, str]:
     else:
         right = conjuncts[1]
 
-    #left = f"(and {' '.join(conjuncts[:1])})"
-    #right = f"(and {' '.join(conjuncts[1:])})"
 
     return prefix, left + suffix, right + suffix
 
@@ -129,25 +127,74 @@ def split_conjuncts(body: str) -> Tuple[str, str, str]:
 # file processing
 # ---------------------------------------------------------------------------
 
-def transform(text: str) -> str:
-    """Rewrite a single SMT-LIB text, return new text."""
+def is_outmost_and_or_let(body: str) -> bool:
+    """Check if the outmost operator is 'and' or 'let'."""
+    return body.startswith("(and") or body.startswith("(let")
+
+
+def extract_assert_line(line: str) -> str:
+    """Extract just the assert statement from a line, handling multiline asserts."""
+    # For now, assume single-line assertions
+    stripped = line.strip()
+    if stripped.startswith("(assert "):
+        return stripped[8:-1].strip()  # Remove "(assert " and trailing ")"
+    return None
+
+
+def transform(text: str) -> str | None:
+    """Rewrite a single SMT-LIB text, return new text, or None if bipartition should be skipped."""
     lines = text.splitlines()
-    result_lines = []
     
+    # Collect all assert lines
+    assert_lines = []
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("(assert "):
-            # Found the assert line - process it
-            # Extract everything between (assert and the final )
-            assert_content = stripped[8:-1]  # Remove "(assert " and ")"
-            prefix, left, right = split_conjuncts(assert_content)
-            
-            # Add two new assertions
-            result_lines.append(f"(assert (! {prefix}{left} :named A))")
-            result_lines.append(f"(assert (! {prefix}{right} :named B))")
-        else:
-            # Keep the line as-is
-            result_lines.append(line)
+            assert_content = extract_assert_line(line)
+            if assert_content:
+                assert_lines.append(assert_content)
+    
+    # Handle different cases based on number of assertions
+    if len(assert_lines) == 0:
+        # No assertions found, skip bipartition
+        return None
+    elif len(assert_lines) == 1:
+        # Single assertion - check if outmost operator is 'and'
+        assert_body = assert_lines[0]
+        if not is_outmost_and_or_let(assert_body):
+            # Skip bipartition if not 'and'
+            return None
+        
+        # It is 'and', proceed with split_conjuncts
+        prefix, left, right = split_conjuncts(assert_body)
+        
+        # Replace the original assert with the new ones
+        result_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("(assert "):
+                # Replace with two new assertions
+                result_lines.append(f"(assert (! {prefix}{left} :named A))")
+                result_lines.append(f"(assert (! {prefix}{right} :named B))")
+            else:
+                result_lines.append(line)
+    
+    elif len(assert_lines) == 2:
+        # Two assertions - first is A, second is B
+        result_lines = []
+        assert_idx = 0
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("(assert "):
+                assert_body = assert_lines[assert_idx]
+                name = "A" if assert_idx == 0 else "B"
+                result_lines.append(f"(assert (! {assert_body} :named {name}))")
+                assert_idx += 1
+            else:
+                result_lines.append(line)
+    else:
+        # More than 2 assertions - skip bipartition
+        return None
     
     return '\n'.join(result_lines)
 
@@ -174,9 +221,14 @@ def main(argv: List[str]):
         try:
             text = smt_file.read_text(encoding="utf-8")
             new_text = transform(text)
-            out_file = smt_file.with_suffix(".bi.smt2")
-            out_file.write_text(new_text, encoding="utf-8")
-            print(f"✓ {smt_file.name} → {out_file.name}")
+            
+            # Only create output file if bipartition succeeded
+            if new_text is not None:
+                out_file = smt_file.with_suffix(".bi.smt2")
+                out_file.write_text(new_text, encoding="utf-8")
+                print(f"✓ {smt_file.name} → {out_file.name}")
+            else:
+                print(f"- {smt_file.name} (skipped: conditions not met)")
         except Exception as e:
             print(f"✗ {smt_file.name}: {e}", file=sys.stderr)
 
