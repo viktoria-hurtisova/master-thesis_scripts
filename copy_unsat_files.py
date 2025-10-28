@@ -8,7 +8,7 @@ Usage:
 The script will:
 1. Recursively scan the source folder for files
 2. Check each file for the specific line '(set-info :status unsat)'
-3. Copy matching files to the destination folder, preserving directory structure
+3. Copy matching files to the destination folder (flat structure)
 """
 
 import os
@@ -64,6 +64,7 @@ def copy_unsat_files(source_folder, dest_folder):
     
     copied_files = 0
     total_files = 0
+    filename_counter = {}
     
     print(f"Scanning files in: {source_path}")
     print(f"Copying matching files to: {dest_path}")
@@ -76,20 +77,27 @@ def copy_unsat_files(source_folder, dest_folder):
             
             # Check if file contains the target line
             if contains_unsat_line(file_path):
-                # Calculate relative path from source
-                relative_path = file_path.relative_to(source_path)
-                dest_file_path = dest_path / relative_path
+                # Copy file directly to destination (flat structure)
+                dest_file_path = dest_path / file_path.name
                 
-                # Create destination directory if needed
-                dest_file_path.parent.mkdir(parents=True, exist_ok=True)
+                # Handle filename conflicts by adding a counter
+                if dest_file_path.exists():
+                    if file_path.name in filename_counter:
+                        filename_counter[file_path.name] += 1
+                    else:
+                        filename_counter[file_path.name] = 1
+                    
+                    stem = dest_file_path.stem
+                    suffix = dest_file_path.suffix
+                    dest_file_path = dest_path / f"{stem}_{filename_counter[file_path.name]}{suffix}"
                 
                 # Copy the file
                 try:
                     shutil.copy2(file_path, dest_file_path)
-                    print(f"Copied: {relative_path}")
+                    print(f"Copied: {dest_file_path.name}")
                     copied_files += 1
                 except (IOError, OSError) as e:
-                    print(f"Error copying {relative_path}: {e}")
+                    print(f"Error copying {file_path.name}: {e}")
     
     print("-" * 50)
     print(f"Scan complete!")
