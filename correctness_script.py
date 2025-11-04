@@ -191,9 +191,8 @@ class MathSat(InterpolantSolver):
         # First line should be sat/unsat, second line should be interpolant
         interpolant_line = non_empty_lines[1]
         
-        # Replace (to_real <num>) with just the number
-        # Pattern to match (to_real <number>) where number can be decimal, scientific notation, or fraction
-        pattern = r'\(to_real\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|\d+/\d+)\)'
+        # Replace (to_real <something>) with just the something
+        pattern = r'\(to_real\s+((?:\(-\s*\d+\)|\d+))\)'
         interpolant = re.sub(pattern, r'\1', interpolant_line)
         
         return interpolant.strip()
