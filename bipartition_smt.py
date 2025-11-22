@@ -176,7 +176,7 @@ def transform(text: str) -> str | None:
                 # Replace with two new assertions
                 result_lines.append(f"(assert (! {prefix}{left} :named A))")
                 result_lines.append(f"(assert (! {prefix}{right} :named B))")
-            elif stripped.len == 0:
+            elif len(stripped) == 0:
                 continue
             else:
                 result_lines.append(line)
@@ -192,7 +192,7 @@ def transform(text: str) -> str | None:
                 name = "A" if assert_idx == 0 else "B"
                 result_lines.append(f"(assert (! {assert_body} :named {name}))")
                 assert_idx += 1
-            elif stripped.len == 0:
+            elif len(stripped) == 0:
                 continue
             else:
                 result_lines.append(line)
