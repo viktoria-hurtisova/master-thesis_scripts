@@ -439,7 +439,7 @@ def main(argv: List[str]) -> int:
     run_number = get_next_run_number(output_dir)
     
     # Set up output file paths with run numbers
-    solver_csv_path = output_dir / f"sanity_check_result_{run_number}.csv"
+    solver_csv_path = output_dir / f"yaga_interpolant_verification_result_{run_number}.csv"
     detailed_results_path = output_dir / f"detailed_results_run_{run_number}.txt"
     
     print(f"Verifying solver   : yaga")
