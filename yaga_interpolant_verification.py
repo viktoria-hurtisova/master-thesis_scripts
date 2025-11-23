@@ -258,6 +258,11 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
             result['solver_stdout'] = ""
         if 'solver_stderr' not in result:
             result['solver_stderr'] = ""
+        
+        # Add entry to solver_runs so it gets written to CSV
+        result['solver_runs'] = [
+            {'solver': solver.name, 'input_file': file_path.name, 'time_seconds': f"{timeout}.000000", 'result': 'timeout'}
+        ]
         return result
     except RuntimeError as e:
         # Check if the runtime error is a wrapped timeout
@@ -269,7 +274,30 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
                 result['solver_stdout'] = ""
             if 'solver_stderr' not in result:
                 result['solver_stderr'] = ""
+            
+            # Add entry to solver_runs so it gets written to CSV
+            result['solver_runs'] = [
+                {'solver': solver.name, 'input_file': file_path.name, 'time_seconds': f"{timeout}.000000", 'result': 'timeout'}
+            ]
             return result
+            
+        # Check if the runtime error is due to solver stderr output (from solvers.py)
+        if "produced error output" in str(e):
+            result['verification_result'] = 'solver_ended_with_error'
+            result['error_message'] = str(e)
+            # Ensure solver output fields exist even on error
+            if 'solver_stdout' not in result:
+                result['solver_stdout'] = ""
+            if 'solver_stderr' not in result:
+                # The exception message contains the stderr content
+                result['solver_stderr'] = str(e)
+            
+            # Add entry to solver_runs so it gets written to CSV (with 0 time)
+            result['solver_runs'] = [
+                {'solver': solver.name, 'input_file': file_path.name, 'time_seconds': "0.000000", 'result': 'error'}
+            ]
+            return result
+
         # Other runtime errors
         result['verification_result'] = f"exception_{str(e).replace(',', ';')}" 
         result['error_message'] = f"Exception during processing: {e}"
@@ -278,6 +306,11 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
             result['solver_stdout'] = ""
         if 'solver_stderr' not in result:
             result['solver_stderr'] = ""
+            
+        # Add entry to solver_runs so it gets written to CSV (with 0 time)
+        result['solver_runs'] = [
+            {'solver': solver.name, 'input_file': file_path.name, 'time_seconds': "0.000000", 'result': 'error'}
+        ]
         return result
     except Exception as e:
         result['verification_result'] = f"exception_{str(e).replace(',', ';')}" 
@@ -287,6 +320,11 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
             result['solver_stdout'] = ""
         if 'solver_stderr' not in result:
             result['solver_stderr'] = ""
+            
+        # Add entry to solver_runs so it gets written to CSV (with 0 time)
+        result['solver_runs'] = [
+            {'solver': solver.name, 'input_file': file_path.name, 'time_seconds': "0.000000", 'result': 'error'}
+        ]
         return result
 
 
