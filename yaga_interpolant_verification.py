@@ -1,16 +1,31 @@
+"""yaga_interpolant_verification.py
+
+A script to verify Craig's interpolants produced by the Yaga solver.
+
+This script:
+1. Runs Yaga on the provided SMT-LIB files.
+2. If the result is UNSAT and an interpolant is produced, it extracts the interpolant.
+3. Creates a verification query using Z3 to check the two interpolation conditions:
+   - A => I
+   - I => not B
+4. Reports verification success/failure.
+
+Usage::
+
+    $ python scripts/yaga_interpolant_verification.py inputs/
+    $ python scripts/yaga_interpolant_verification.py inputs/single_file.smt2 --timeout 600
+    
+The script creates a 'results' directory (or user-specified output) with CSV summaries
+and detailed logs.
+"""
 from __future__ import annotations
 import argparse
 import csv
-import itertools
-import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 import time
-from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -93,7 +108,7 @@ def create_verification_input_file(source_path: str, interpolant: str) -> str:
     
     return str(output_path)
 
-def verify_interpolant(file_path: str, interpolant: str, timeout: int = 900) -> Tuple[bool, Optional[str], str, str]:
+def verify_interpolant(file_path: str, interpolant: str, timeout: int = 600) -> Tuple[bool, Optional[str], str, str]:
     """
     Verify a single interpolant against Craig's conditions using Z3 by checking:
     A ⇒ I ∧ I ⇒ ¬B is SAT
@@ -148,7 +163,7 @@ def verify_interpolant(file_path: str, interpolant: str, timeout: int = 900) -> 
 # Orchestrator
 # =========================
 
-def process_file(path: str, solver: InterpolantSolver, timeout: int = 900) -> Dict[str, Any]:
+def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Dict[str, Any]:
     """
     Process a single SMT file with one solver and verify its interpolant (if any).
     """
@@ -411,8 +426,8 @@ def main(argv: List[str]) -> int:
     parser.add_argument(
         "-t", "--timeout", 
         type=int, 
-        default=900,
-        help="Timeout in seconds for each solver execution (default: 900 = 15 minutes)"
+        default=600,
+        help="Timeout in seconds for each solver execution (default: 600 = 10 minutes)"
     )
     
     args = parser.parse_args(argv)

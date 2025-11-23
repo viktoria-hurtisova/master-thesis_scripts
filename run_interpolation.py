@@ -1,7 +1,23 @@
+"""run_interpolation.py
+
+A generic orchestrator to run SMT solvers (MathSAT, Yaga, OpenSMT) on SMT-LIB benchmarks
+and collect interpolation results.
+
+This script:
+1. Runs the specified solver on a set of input .smt2 files.
+2. Captures the result (SAT/UNSAT/UNKNOWN), execution time, and generated interpolant.
+3. Logs all results to a CSV file and a detailed text file.
+
+Usage::
+
+    $ python scripts/run_interpolation.py mathsat inputs/benchmark_dir -t 600
+    $ python scripts/run_interpolation.py yaga inputs/single_file.smt2
+
+The script tracks run numbers automatically in the output directory.
+"""
 from __future__ import annotations
 import argparse
 import csv
-import os
 import sys
 import time
 from pathlib import Path
@@ -20,7 +36,7 @@ except ImportError:
 # Orchestrator
 # =========================
 
-def process_file(path: str, solver: InterpolantSolver, timeout: int = 900) -> Dict[str, Any]:
+def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Dict[str, Any]:
     """
     Process a single SMT file with a single solver and return results.
     
@@ -199,8 +215,8 @@ def main(argv: List[str]) -> int:
     parser.add_argument(
         "-t", "--timeout", 
         type=int, 
-        default=900,
-        help="Timeout in seconds for each solver execution (default: 900 = 15 minutes)"
+        default=600,
+        help="Timeout in seconds for each solver execution (default: 600 = 10 minutes)"
     )
     
     args = parser.parse_args(argv)
