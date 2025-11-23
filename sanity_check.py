@@ -288,7 +288,6 @@ def write_results(file_result: Dict[str, Any], solver_csv_writer: csv.writer,
     # Write solver runs to CSV with verification result
     for run in file_result['solver_runs']:
         solver_csv_writer.writerow([
-            run['solver'],
             run['input_file'],
             run['time_seconds'],
             file_result['verification_result']
@@ -402,11 +401,6 @@ def main(argv: List[str]) -> int:
         description="Verify Craig's interpolant for a single SMT solver"
     )
     parser.add_argument(
-        "solver", 
-        choices=defined_solvers,
-        help="Solver name (mathsat, yaga, opensmt)"
-    )
-    parser.add_argument(
         "inputs", 
         help="Path to input files or directory containing .smt2 files"
     )
@@ -425,7 +419,7 @@ def main(argv: List[str]) -> int:
     
     # Create solver instance
     try:
-        solver_inst = create_solver(args.solver)
+        solver_inst = create_solver("yaga")
     except (FileNotFoundError, ValueError) as e:
         sys.exit(f"Error creating solvers: {e}")
     
@@ -448,7 +442,7 @@ def main(argv: List[str]) -> int:
     solver_csv_path = output_dir / f"sanity_check_result_{run_number}.csv"
     detailed_results_path = output_dir / f"detailed_results_run_{run_number}.txt"
     
-    print(f"Verifying solver   : {args.solver}")
+    print(f"Verifying solver   : yaga")
     print(f"Input files        : {len(input_files)} files")
     print(f"Processing files in: {args.inputs}")
     print(f"Output directory   : {output_dir}")
@@ -464,11 +458,11 @@ def main(argv: List[str]) -> int:
         solver_csv_writer = csv.writer(solver_csv_file)
         
         # Always write headers since we're creating new files
-        solver_csv_writer.writerow(["solver", "input_file", "time_seconds", "verification_result"])
+        solver_csv_writer.writerow(["input_file", "time_seconds", "verification_result"])
         
         # Write header to detailed results file
         detailed_file.write(f"Detailed Results - Run {run_number}\n")
-        detailed_file.write(f"Solver: {args.solver}\n")
+        detailed_file.write(f"Solver: yaga\n")
         detailed_file.write(f"Generated for {len(input_files)} input files\n")
         detailed_file.write("=" * 50 + "\n\n")
         
