@@ -213,7 +213,10 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
                 result['error_message'] = f"{solver.name} did not produce an interpolant"
                 return result
             # Verify interpolant
-            print(f"Interpolant: {interpolant}")
+            display_interpolant = interpolant
+            if display_interpolant and len(display_interpolant) > 1000:
+                display_interpolant = display_interpolant[:1000] + "... <truncated>"
+            print(f"Interpolant: {display_interpolant}")
             print("Verifying interpolant...")
             try:
                 is_verified, z3_output, z3_stdout, z3_stderr = verify_interpolant(path, interpolant, timeout)
@@ -360,7 +363,11 @@ def write_results(file_result: Dict[str, Any], solver_csv_writer: csv.writer,
         details = file_result['detailed_results']
         detailed_file.write(f"SAT Result: {details['result']}\n")
         detailed_file.write(f"{file_result['solver_name']} time: {details['solver_time']:.6f}s\n")
-        detailed_file.write(f"Interpolant: {details['interpolant']}\n")
+        
+        interpolant = str(details['interpolant'])
+        if len(interpolant) > 1000:
+            interpolant = interpolant[:1000] + "... <truncated>"
+        detailed_file.write(f"Interpolant: {interpolant}\n")
     
     # Write solver output (stdout and stderr)
     detailed_file.write("\n--- Solver Output (STDOUT) ---\n")
@@ -493,7 +500,7 @@ def main(argv: List[str]) -> int:
     
     # Set up output file paths with run numbers
     solver_csv_path = output_dir / f"yaga_interpolant_verification_result_{run_number}.csv"
-    detailed_results_path = output_dir / f"detailed_results_run_{run_number}.txt"
+    detailed_results_path = output_dir / f"detailed_results_verification_run_{run_number}.txt"
     
     print(f"Verifying solver   : yaga")
     print(f"Input files        : {len(input_files)} files")

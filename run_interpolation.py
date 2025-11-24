@@ -20,6 +20,7 @@ import argparse
 import csv
 import sys
 import time
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -91,6 +92,19 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
         result['success'] = True
         return result
         
+    except subprocess.TimeoutExpired:
+        error_msg = f"Solver execution timed out after {timeout} seconds"
+        result['error_message'] = error_msg
+        result['solver_run'] = {
+            'solver': solver.name, 
+            'input_file': file_path.name, 
+            'time_seconds': f"{float(timeout):.6f}", 
+            'result': "timeout",
+            'interpolant_produced': False,
+            'error': error_msg
+        }
+        return result
+
     except Exception as e:
         error_msg = f"Exception during processing: {e}"
         result['error_message'] = error_msg
@@ -141,7 +155,10 @@ def write_results(file_result: Dict[str, Any], solver_csv_writer: csv.writer, de
         detailed_file.write(f"Time: {details['solver_time']:.6f}s\n")
         
         if details['solver_interpolant']:
-            detailed_file.write(f"Interpolant: {details['solver_interpolant']}\n")
+            interpolant = str(details['solver_interpolant'])
+            if len(interpolant) > 1000:
+                interpolant = interpolant[:1000] + "... <truncated>"
+            detailed_file.write(f"Interpolant: {interpolant}\n")
         else:
             detailed_file.write("Interpolant: None\n")
     
