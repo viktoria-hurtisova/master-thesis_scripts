@@ -100,9 +100,9 @@ def copy_unsat_files(source_folder, dest_folder):
                     print(f"Error copying {file_path.name}: {e}")
     
     print("-" * 50)
-    print(f"Scan complete!")
-    print(f"Total files scanned: {total_files}")
-    print(f"Files copied: {copied_files}")
+    print(f"Total input files: {total_files}")
+    print(f"Copied:            {copied_files}")
+    print(f"Skipped:           {total_files - copied_files}")
 
 
 def main():
