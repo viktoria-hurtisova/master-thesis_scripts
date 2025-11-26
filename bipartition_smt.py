@@ -149,6 +149,10 @@ def transform(text: str) -> str | None:
     assert_lines = []
     for line in lines:
         stripped = line.strip()
+        # Ignore (set-info :status unsat) as it may conflict with partial formulas
+        if stripped.startswith("(set-info :status") and "unsat" in stripped.lower():
+            continue
+            
         if stripped.startswith("(assert "):
             assert_content = extract_assert_line(line)
             if assert_content:
@@ -172,6 +176,10 @@ def transform(text: str) -> str | None:
         result_lines = []
         for line in lines:
             stripped = line.strip()
+            # Ignore (set-info :status unsat) here too for the output
+            if stripped.startswith("(set-info :status") and "unsat" in stripped.lower():
+                continue
+                
             if stripped.startswith("(assert "):
                 # Replace with two new assertions
                 result_lines.append(f"(assert (! {prefix}{left} :named A))")
@@ -187,6 +195,10 @@ def transform(text: str) -> str | None:
         assert_idx = 0
         for line in lines:
             stripped = line.strip()
+            # Ignore (set-info :status unsat) here too for the output
+            if stripped.startswith("(set-info :status") and "unsat" in stripped.lower():
+                continue
+
             if stripped.startswith("(assert "):
                 assert_body = assert_lines[assert_idx]
                 name = "A" if assert_idx == 0 else "B"
@@ -217,11 +229,15 @@ def main(argv: List[str]):
         print(f"error: {target_dir} is not a directory", file=sys.stderr)
         sys.exit(2)
 
+    total_files = 0
+    bipartitioned_files = 0
+
     for smt_file in sorted(target_dir.glob("*.smt2")):
         # Skip files that are already bipartitioned
         if smt_file.name.endswith(".bi.smt2"):
             continue
             
+        total_files += 1
         try:
             text = smt_file.read_text(encoding="utf-8")
             new_text = transform(text)
@@ -231,10 +247,16 @@ def main(argv: List[str]):
                 out_file = smt_file.with_suffix(".bi.smt2")
                 out_file.write_text(new_text, encoding="utf-8")
                 print(f"✓ {smt_file.name} → {out_file.name}")
+                bipartitioned_files += 1
             else:
                 print(f"- {smt_file.name} (skipped: conditions not met)")
         except Exception as e:
             print(f"✗ {smt_file.name}: {e}", file=sys.stderr)
+
+    print("-" * 40)
+    print(f"Total input files: {total_files}")
+    print(f"Bipartitioned:     {bipartitioned_files}")
+    print(f"Skipped:           {total_files - bipartitioned_files}")
 
 
 if __name__ == "__main__":
