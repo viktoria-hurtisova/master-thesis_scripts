@@ -2,7 +2,12 @@
 Script to check satisfiability of Formula A in SMT2 files.
 It creates a temporary file containing only Formula A (removing Formula B assertions)
 and runs the Z3 solver on it.
-If Formula A is UNSAT, the original file is deleted.
+
+Behavior:
+- If Formula A is UNSAT or solver errors -> Original file is DELETED.
+- If Formula A is SAT -> Original file is KEPT.
+- If solver times out -> Original file is KEPT, and its path is appended to 'timed_out_files.txt' in the input directory.
+
 Can process a single file or a directory of .smt2 files.
 """
 
@@ -49,10 +54,10 @@ def create_a_only_file(source_path: str) -> str:
     
     return str(output_path)
 
-def check_a_sat(file_path: str, timeout: int = 600) -> str:
+def check_a_sat(file_path: str, timeout_log: str, timeout: int = 200) -> str:
     """
     Runs Z3 on the file containing only Formula A.
-    Returns status: 'deleted', 'kept', or 'error'.
+    Returns status: 'deleted', 'kept', 'timeout', or 'error'.
     """
     temp_file = None
     try:
@@ -80,7 +85,15 @@ def check_a_sat(file_path: str, timeout: int = 600) -> str:
             print(f"-> Formula A is UNSAT. Deleting original file.")
             try:
                 os.remove(file_path)
-                # print(f"Successfully deleted {file_path}")
+                print(f"Successfully deleted {file_path}")
+                return "deleted"
+            except OSError as e:
+                print(f"Error deleting original file: {e}")
+                return "error"
+        elif stderr:
+            print(f"-> Solver finished with error. Deleting original file.")
+            try:
+                os.remove(file_path)
                 return "deleted"
             except OSError as e:
                 print(f"Error deleting original file: {e}")
@@ -90,10 +103,28 @@ def check_a_sat(file_path: str, timeout: int = 600) -> str:
             return "kept"
 
     except Exception as e:
+        if "timed out" in str(e).lower():
+            print(f"-> Solver timed out. Keeping file and logging to {timeout_log}")
+            try:
+                # Ensure directory exists (should exist as it's input dir or parent)
+                log_path = Path(timeout_log)
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                with open(timeout_log, "a") as f:
+                    f.write(f"{file_path}\n")
+                return "timeout"
+            except Exception as io_err:
+                print(f"Error writing to timeout log: {io_err}")
+                return "error"
+
         print(f"Error processing {file_path}: {e}")
-        # import traceback
-        # traceback.print_exc()
-        return "error"
+        print(f"-> Deleting file due to exception.")
+        try:
+            os.remove(file_path)
+            return "deleted"
+        except OSError as del_err:
+            print(f"Error deleting original file: {del_err}")
+            return "error"
     finally:
         # Cleanup the temporary file
         if temp_file and os.path.exists(temp_file):
@@ -122,8 +153,8 @@ def main():
     parser.add_argument(
         "-t", "--timeout", 
         type=int, 
-        default=600, 
-        help="Timeout in seconds (default: 600)"
+        default=200, 
+        help="Timeout in seconds (default: 200)"
     )
     
     args = parser.parse_args()
@@ -134,19 +165,28 @@ def main():
         print(f"Error: No input files found at '{args.input_path}'")
         sys.exit(1)
 
+    # Determine timeout log file path
+    input_path_obj = Path(args.input_path).expanduser().resolve()
+    if input_path_obj.is_dir():
+        timeout_log = input_path_obj / "_timed_out_files.txt"
+    else:
+        timeout_log = input_path_obj.parent / "_timed_out_files.txt"
+
     stats = {
         "total": len(files),
         "deleted": 0,
         "kept": 0,
-        "error": 0
+        "error": 0,
+        "timeout": 0
     }
     
     print(f"Found {len(files)} files to process.")
+    print(f"Timeout log will be written to: {timeout_log}")
     print("=" * 60)
     
     for i, f in enumerate(files, 1):
         print(f"[{i}/{len(files)}] Processing: {f.name}")
-        status = check_a_sat(str(f), args.timeout)
+        status = check_a_sat(str(f), str(timeout_log), args.timeout)
         stats[status] += 1
         print("-" * 60)
 
@@ -154,9 +194,10 @@ def main():
     print("STATISTICS")
     print("="*30)
     print(f"Total files processed: {stats['total']}")
-    print(f"Files deleted (A UNSAT): {stats['deleted']}")
-    print(f"Files kept (A SAT/Other): {stats['kept']}")
-    print(f"Errors encountered:      {stats['error']}")
+    print(f"Files deleted (UNSAT/Error): {stats['deleted']}")
+    print(f"Files kept (SAT/Other):      {stats['kept']}")
+    print(f"Files timed out:             {stats['timeout']}")
+    print(f"Errors encountered:          {stats['error']}")
     print("="*30)
 
 if __name__ == "__main__":
