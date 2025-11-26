@@ -174,24 +174,26 @@ class MathSat(InterpolantSolver):
         - Extract interpolant from the second line
         - Replace (to_real <num>) with just the number within larger expressions
         """
-        import re
+
+        # import re
         
-        lines = raw_output.strip().split('\n')
+        # lines = raw_output.strip().split('\n')
         
         # Filter out empty lines
-        non_empty_lines = [line.strip() for line in lines if line.strip()]
+        # non_empty_lines = [line.strip() for line in lines if line.strip()]
         
-        if len(non_empty_lines) < 2:
-            return None
+        # if len(non_empty_lines) < 2:
+        #    return None
         
         # First line should be sat/unsat, second line should be interpolant
-        interpolant_line = non_empty_lines[1]
+        # interpolant_line = non_empty_lines[1]
         
         # Replace (to_real <something>) with just the something
-        pattern = r'\(to_real\s+((?:\(-\s*\d+\)|\d+))\)'
-        interpolant = re.sub(pattern, r'\1', interpolant_line)
+        # pattern = r'\(to_real\s+((?:\(-\s*\d+\)|\d+))\)'
+        # interpolant = re.sub(pattern, r'\1', interpolant_line)
         
-        return interpolant.strip()
+        #return interpolant.strip()
+        return ""
 
 class Yaga(InterpolantSolver):
     
@@ -236,16 +238,17 @@ class Yaga(InterpolantSolver):
         Postprocess Yaga output to extract interpolant:
         - Returns the second line from the input
         """
-        lines = raw_output.strip().split('\n')
+        # lines = raw_output.strip().split('\n')
         
         # Filter out empty lines
-        non_empty_lines = [line.strip() for line in lines if line.strip()]
+        # non_empty_lines = [line.strip() for line in lines if line.strip()]
         
-        if len(non_empty_lines) < 2:
-            return None
+        # if len(non_empty_lines) < 2:
+        #     return None
         
         # Return the second line
-        return non_empty_lines[1].strip()
+        # return non_empty_lines[1].strip()
+        return ""
 
 class OpenSMT(InterpolantSolver):
     
