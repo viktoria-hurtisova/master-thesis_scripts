@@ -15,8 +15,8 @@ Usage::
     $ python scripts/yaga_interpolant_verification.py inputs/
     $ python scripts/yaga_interpolant_verification.py inputs/single_file.smt2 --timeout 600
     
-The script creates a 'results' directory (or user-specified output) with CSV summaries
-and detailed logs.
+The script creates a 'results/run_<timestamp>' directory with individual CSV summaries
+and detailed logs for each input file.
 """
 from __future__ import annotations
 import argparse
@@ -26,6 +26,8 @@ import re
 import subprocess
 import sys
 import time
+import concurrent.futures
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -63,7 +65,13 @@ def create_verification_input_file(source_path: str, interpolant: str) -> str:
     # Create a new file path for the comparison
     source_path_obj = Path(source_path)
     timestamp = int(time.time())
-    output_path = source_path_obj.with_name(f"{source_path_obj.stem}.verification_{timestamp}.smt2")
+    # Use thread ID or similar to avoid collision if multiple threads process same file?
+    # Actually, create_verification_input_file creates a new file.
+    # If we run multiple runs in parallel on SAME file, timestamp might collide.
+    # Adding a random suffix or thread ID would be safer.
+    # But the logic runs one file once per run.
+    # Parallelization is across *different* files.
+    output_path = source_path_obj.with_name(f"{source_path_obj.stem}.verification_{timestamp}_{threading.get_ident()}.smt2")
 
     # process the file to extract A and B
     lines = content.split('\n')
@@ -139,7 +147,7 @@ def verify_interpolant(file_path: str, interpolant: str, timeout: int = 600) -> 
 
         # Verify that  A ⇒ I ∧ I ⇒ ¬B	
         is_verified = (sat_result == "sat")
-        print(f"Verification result: {sat_result}")
+        # print(f"Verification result: {sat_result}")
         
         # Combine stdout and stderr for z3_output
         z3_output = f"STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}" if (stdout or stderr) else None
@@ -179,9 +187,9 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
     }
 
     try:
-        print(f"Running {solver.name}...")
+        # print(f"Running {solver.name}...")
         sat_res, interpolant, run_time, solver_stdout, solver_stderr = solver.run(path, timeout)
-        print(f"Result: {solver.name}={sat_res} ({run_time:.3f}s)")
+        # print(f"Result: {solver.name}={sat_res} ({run_time:.3f}s)")
 
         # Store solver output
         result['solver_stdout'] = solver_stdout
@@ -216,12 +224,12 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
             display_interpolant = interpolant
             if display_interpolant and len(display_interpolant) > 1000:
                 display_interpolant = display_interpolant[:1000] + "... <truncated>"
-            print(f"Interpolant: {display_interpolant}")
-            print("Verifying interpolant...")
+            # print(f"Interpolant: {display_interpolant}")
+            # print("Verifying interpolant...")
             try:
                 is_verified, z3_output, z3_stdout, z3_stderr = verify_interpolant(path, interpolant, timeout)
                 result['verification_result'] = 'verified' if is_verified else 'not_verified'
-                print(f"Interpolant is verified: {is_verified}")
+                # print(f"Interpolant is verified: {is_verified}")
                 result['detailed_results'] = {
                     'file_name': file_path.name,
                     'result': sat_res,
@@ -331,117 +339,92 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
         return result
 
 
-def write_results(file_result: Dict[str, Any], solver_csv_writer: csv.writer, 
-                 detailed_file) -> None:
+def write_results(file_result: Dict[str, Any], output_dir: Path, detailed: bool = False) -> None:
     """
-    Write the results from process_file to CSV file and append to detailed results file.
+    Write the results from process_file to individual CSV and detailed files in the output directory.
     
     Args:
         file_result: Dictionary containing all results from process_file
-        solver_csv_writer: CSV writer for solver runs with verification results
-        detailed_file: Open file handle for detailed results (or None)
+        output_dir: Directory to save the results
+        detailed: If True, also write a detailed text file with full output
     """
+    file_name = file_result['file_name']
+    # Create filenames based on input filename
+    base_name = Path(file_name).stem
+    
+    csv_path = output_dir / f"{base_name}_results.csv"
+    detailed_path = output_dir / f"{base_name}_results_detailed.txt"
+    
     # Write solver runs to CSV with verification result
-    for run in file_result['solver_runs']:
-        solver_csv_writer.writerow([
-            run['input_file'],
-            run['time_seconds'],
-            file_result['verification_result']
-        ])
+    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["input_file", "time_seconds", "verification_result"])
+        for run in file_result['solver_runs']:
+            writer.writerow([
+                run['input_file'],
+                run['time_seconds'],
+                file_result['verification_result']
+            ])
     
-    # Write to detailed results file if available
-    if not detailed_file:
+    # Write to detailed results file only if detailed flag is set
+    if not detailed:
         return
-
-    detailed_file.write(f"=== {file_result['file_name']} ===\n")
-    detailed_file.write(f"Solver: {file_result['solver_name']}\n")
-    detailed_file.write(f"Success: {file_result['success']}\n")
-    detailed_file.write(f"Verification Result: {file_result['verification_result']}\n")
     
-    if file_result['error_message']:
-        detailed_file.write(f"Error: {file_result['error_message']}\n")
-    
-    # Write detailed results if available
-    if 'detailed_results' in file_result:
-        details = file_result['detailed_results']
-        detailed_file.write(f"SAT Result: {details['result']}\n")
-        detailed_file.write(f"{file_result['solver_name']} time: {details['solver_time']:.6f}s\n")
+    with detailed_path.open("w", encoding="utf-8") as detailed_file:
+        detailed_file.write(f"=== {file_result['file_name']} ===\n")
+        detailed_file.write(f"Solver: {file_result['solver_name']}\n")
+        detailed_file.write(f"Success: {file_result['success']}\n")
+        detailed_file.write(f"Verification Result: {file_result['verification_result']}\n")
         
-        interpolant = str(details['interpolant'])
-        if len(interpolant) > 1000:
-            interpolant = interpolant[:1000] + "... <truncated>"
-        detailed_file.write(f"Interpolant: {interpolant}\n")
-    
-    # Write solver output (stdout and stderr)
-    detailed_file.write("\n--- Solver Output (STDOUT) ---\n")
-    solver_stdout = file_result.get('solver_stdout', "")
-    if solver_stdout:
-        detailed_file.write(solver_stdout)
-    else:
-        detailed_file.write("(empty)\n")
-    
-    detailed_file.write("\n--- Solver Output (STDERR) ---\n")
-    solver_stderr = file_result.get('solver_stderr', "")
-    if solver_stderr:
-        detailed_file.write(solver_stderr)
-    else:
-        detailed_file.write("(empty)\n")
-    
-    # Write z3 verification output if interpolant was verified or not verified
-    if 'z3_stdout' in file_result or 'z3_stderr' in file_result:
-        detailed_file.write("\n--- Z3 Verification Output (STDOUT) ---\n")
-        z3_stdout = file_result.get('z3_stdout', "")
-        if z3_stdout:
-            detailed_file.write(z3_stdout)
+        if file_result['error_message']:
+            detailed_file.write(f"Error: {file_result['error_message']}\n")
+        
+        # Write detailed results if available
+        if 'detailed_results' in file_result:
+            details = file_result['detailed_results']
+            detailed_file.write(f"SAT Result: {details['result']}\n")
+            detailed_file.write(f"{file_result['solver_name']} time: {details['solver_time']:.6f}s\n")
+            
+            interpolant = str(details['interpolant'])
+            # No truncation as requested
+            detailed_file.write(f"Interpolant: {interpolant}\n")
+        
+        # Write solver output (stdout and stderr)
+        detailed_file.write("\n--- Solver Output (STDOUT) ---\n")
+        solver_stdout = file_result.get('solver_stdout', "")
+        if solver_stdout:
+            detailed_file.write(solver_stdout)
         else:
             detailed_file.write("(empty)\n")
         
-        detailed_file.write("\n--- Z3 Verification Output (STDERR) ---\n")
-        z3_stderr = file_result.get('z3_stderr', "")
-        if z3_stderr:
-            detailed_file.write(z3_stderr)
+        detailed_file.write("\n--- Solver Output (STDERR) ---\n")
+        solver_stderr = file_result.get('solver_stderr', "")
+        if solver_stderr:
+            detailed_file.write(solver_stderr)
         else:
             detailed_file.write("(empty)\n")
-    
-    # Write z3 error if Z3 verification failed
-    if file_result['verification_result'] == 'z3_error' and 'z3_verification_output' in file_result:
-        detailed_file.write("\n--- Z3 Verification Error ---\n")
-        detailed_file.write(file_result['z3_verification_output'])
-        detailed_file.write("\n")
-    
-    detailed_file.write("\n")  # Add blank line between entries
-    detailed_file.flush()  # Ensure data is written immediately
-
-
-def get_next_run_number(output_dir: Path) -> int:
-    """
-    Get the next run number by checking existing files in the output directory.
-    
-    Args:
-        output_dir: Directory to check for existing run files
         
-    Returns:
-        Next available run number
-    """
-    # Look for existing files with pattern *_run_N.* 
-    existing_files = list(output_dir.glob("*_run_*.csv")) + list(output_dir.glob("*_run_*.txt"))
-    
-    if not existing_files:
-        return 1
-    
-    # Extract run numbers from existing files
-    run_numbers = []
-    for file_path in existing_files:
-        # Look for pattern like "correctness_solver_runs_run_3.csv"
-        parts = file_path.stem.split('_run_')
-        if len(parts) == 2:
-            try:
-                run_num = int(parts[1])
-                run_numbers.append(run_num)
-            except ValueError:
-                continue
-    
-    return max(run_numbers) + 1 if run_numbers else 1
+        # Write z3 verification output if interpolant was verified or not verified
+        if 'z3_stdout' in file_result or 'z3_stderr' in file_result:
+            detailed_file.write("\n--- Z3 Verification Output (STDOUT) ---\n")
+            z3_stdout = file_result.get('z3_stdout', "")
+            if z3_stdout:
+                detailed_file.write(z3_stdout)
+            else:
+                detailed_file.write("(empty)\n")
+            
+            detailed_file.write("\n--- Z3 Verification Output (STDERR) ---\n")
+            z3_stderr = file_result.get('z3_stderr', "")
+            if z3_stderr:
+                detailed_file.write(z3_stderr)
+            else:
+                detailed_file.write("(empty)\n")
+        
+        # Write z3 error if Z3 verification failed
+        if file_result['verification_result'] == 'z3_error' and 'z3_verification_output' in file_result:
+            detailed_file.write("\n--- Z3 Verification Error ---\n")
+            detailed_file.write(file_result['z3_verification_output'])
+            detailed_file.write("\n")
 
 
 def gather_inputs(inputs_field: str) -> List[Path]:
@@ -456,6 +439,44 @@ def gather_inputs(inputs_field: str) -> List[Path]:
         return [target]
     else:
         sys.exit(f"Error: Input path does not exist: {target}")
+
+
+def process_single_input(smt_file: Path, solver_name: str, timeout: int, run_dir: Path, print_lock: threading.Lock, detailed: bool = False) -> bool:
+    """
+    Process a single input file: create solver, run processing, write results, log output.
+    Returns True if failure occurred, False otherwise (to sum failures).
+    """
+    # Create solver instance per thread to ensure safety/independence
+    try:
+        solver = create_solver(solver_name)
+    except Exception as e:
+        with print_lock:
+             print(f"Error creating solver for {smt_file.name}: {e}")
+        return True  # Failure
+    
+    with print_lock:
+        print(f"=== Processing {smt_file.name} ===")
+        print(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Run the main processing logic (prints are suppressed in this function now)
+    file_result = process_file(str(smt_file), solver, timeout)
+    
+    # Write results to disk (thread-safe as files are distinct per input)
+    write_results(file_result, run_dir, detailed)
+    
+    success = file_result['success']
+    
+    with print_lock:
+        # Print result summary
+        if not success:
+            print(f"FAILURE: {smt_file.name}")
+            if file_result['error_message']:
+                print(f"  Error: {file_result['error_message']}")
+        else:
+             print(f"SUCCESS: {smt_file.name}")
+        print() # Blank line between entries
+        
+    return not success
 
 
 def main(argv: List[str]) -> int:
@@ -482,12 +503,19 @@ def main(argv: List[str]) -> int:
         action="store_true",
         help="Enable detailed results logging to a text file"
     )
+    parser.add_argument(
+        "-j", "--jobs",
+        type=int,
+        default=1,
+        help="Number of parallel jobs/threads to use (default: 1)"
+    )
     
     args = parser.parse_args(argv)
     
-    # Create solver instance
+    # Check if solver creation works (just to fail early if yaga is missing)
     try:
-        solver_inst = create_solver("yaga")
+        # We just check if we can create one, but we'll create fresh ones in threads
+        _ = create_solver("yaga")
     except (FileNotFoundError, ValueError) as e:
         sys.exit(f"Error creating solvers: {e}")
     
@@ -496,86 +524,52 @@ def main(argv: List[str]) -> int:
     
     # Set up output directory
     if args.output:
-        output_dir = Path(args.output)
+        base_output_dir = Path(args.output)
     else:
-        output_dir = Path.cwd() / "results"
+        base_output_dir = Path.cwd() / "results"
     
-    # Create output directory if it doesn't exist
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Create base output directory if it doesn't exist
+    base_output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Get next run number
-    run_number = get_next_run_number(output_dir)
-    
-    # Set up output file paths with run numbers
-    solver_csv_path = output_dir / f"yaga_interpolant_verification_result_{run_number}.csv"
-    
-    detailed_results_path = None
-    if args.detailed:
-        detailed_results_path = output_dir / f"detailed_results_verification_run_{run_number}.txt"
+    # Run identifier based on timestamp
+    run_id = int(time.time())
+    run_dir = base_output_dir / f"run_verification_{run_id}"
+    run_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"Verifying solver   : yaga")
     print(f"Input files        : {len(input_files)} files")
     print(f"Processing files in: {args.inputs}")
-    print(f"Output directory   : {output_dir}")
-    print(f"Run number         : {run_number}")
+    print(f"Output directory   : {run_dir}")
+    print(f"Run ID             : {run_id}")
     print(f"Timeout per solver : {args.timeout} seconds ({args.timeout/60:.1f} minutes)")
-    print(f"Results CSV        : {solver_csv_path}")
+    print(f"Parallel jobs      : {args.jobs}")
+    print()
     
-    if detailed_results_path:
-        print(f"Detailed results   : {detailed_results_path}\n")
-    else:
-        print(f"Detailed results   : (disabled)\n")
+    failures = 0
     
-    # Prepare CSV writer and detailed results file
-    detailed_file = None
-    
-    try:
-        if detailed_results_path:
-            detailed_file = detailed_results_path.open("w", encoding="utf-8")
-            # Write header to detailed results file
-            detailed_file.write(f"Detailed Results - Run {run_number}\n")
-            detailed_file.write(f"Solver: yaga\n")
-            detailed_file.write(f"Generated for {len(input_files)} input files\n")
-            detailed_file.write("=" * 50 + "\n\n")
-            
-        with solver_csv_path.open("w", newline="", encoding="utf-8") as solver_csv_file:
-            
-            solver_csv_writer = csv.writer(solver_csv_file)
-            
-            # Always write headers since we're creating new files
-            solver_csv_writer.writerow(["input_file", "time_seconds", "verification_result"])
-            
-            failures = 0
-    
-            # Process each file
-            for smt_file in input_files:
-                print(f"=== Processing {smt_file.name} ===")
-                print(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-                
-                # Process the file and get results
-                file_result = process_file(str(smt_file), solver_inst, args.timeout)
-                
-                # Write results to CSV file and detailed results file
-                write_results(file_result, solver_csv_writer, detailed_file)
-                
-                # Flush CSV file after each file
-                solver_csv_file.flush()
-                if detailed_file:
-                    detailed_file.flush()
-                
-                # Track failures and provide feedback
-                if not file_result['success']:
-                    failures += 1
-                    print(f"FAILURE: {smt_file.name}")
-                    if file_result['error_message']:
-                        print(f"  Error: {file_result['error_message']}")
-                else:
-                    print(f"SUCCESS: {smt_file.name}")
-                print()
-    finally:
-        if detailed_file:
-            detailed_file.close()
+    # Lock for synchronizing print output
+    print_lock = threading.Lock()
 
+    # Use ThreadPoolExecutor for parallel processing
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
+        # Submit all tasks
+        future_to_file = {
+            executor.submit(process_single_input, smt_file, "yaga", args.timeout, run_dir, print_lock, args.detailed): smt_file
+            for smt_file in input_files
+        }
+        
+        # Process results as they complete
+        for future in concurrent.futures.as_completed(future_to_file):
+            smt_file = future_to_file[future]
+            try:
+                is_failure = future.result()
+                if is_failure:
+                    failures += 1
+            except Exception as exc:
+                with print_lock:
+                    print(f"Generated an exception for {smt_file.name}: {exc}")
+                failures += 1
+    
     print(f"\nSummary: {failures} failures out of {len(input_files)} files")
     return 1 if failures else 0
 

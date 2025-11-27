@@ -119,85 +119,58 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
         return result
 
 
-def write_results(file_result: Dict[str, Any], solver_csv_writer: csv.writer, detailed_file) -> None:
+def write_results(file_result: Dict[str, Any], output_dir: Path) -> None:
     """
-    Write the results from process_file to CSV files and append to detailed results file.
+    Write the results from process_file to individual CSV and detailed files.
     
     Args:
         file_result: Dictionary containing all results from process_file
-        solver_csv_writer: CSV writer for individual solver runs
-        detailed_file: Open file handle for detailed results (or None)
+        output_dir: Directory to save the results
     """
+    file_name = file_result['file_name']
+    base_name = Path(file_name).stem
+    
+    csv_path = output_dir / f"{base_name}_results.csv"
+    detailed_path = output_dir / f"{base_name}_results_detailed.txt"
+
     # Write solver run to CSV
     run = file_result['solver_run']
     if run:
-        solver_csv_writer.writerow([
-            run['solver'], 
-            run['input_file'], 
-            run['time_seconds'], 
-            run['result'], 
-            run['interpolant_produced'],
-            run['error']
-        ])
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["solver", "input_file", "time_seconds", "result", "interpolant_produced", "error"])
+            writer.writerow([
+                run['solver'], 
+                run['input_file'], 
+                run['time_seconds'], 
+                run['result'], 
+                run['interpolant_produced'],
+                run['error']
+            ])
     
-    # Write to detailed results file if available
-    if not detailed_file:
-        return
-
-    detailed_file.write(f"=== {file_result['file_name']} ===\n")
-    detailed_file.write(f"Solver: {file_result['solver_name']}\n")
-    detailed_file.write(f"Success: {file_result['success']}\n")
-    
-    if file_result['error_message']:
-        detailed_file.write(f"Error: {file_result['error_message']}\n")
-    
-    # Write detailed results if available
-    if 'detailed_results' in file_result:
-        details = file_result['detailed_results']
-        detailed_file.write(f"Result: {details['result']}\n")
-        detailed_file.write(f"Time: {details['solver_time']:.6f}s\n")
+    # Write detailed results file
+    with detailed_path.open("w", encoding="utf-8") as detailed_file:
+        detailed_file.write(f"=== {file_result['file_name']} ===\n")
+        detailed_file.write(f"Solver: {file_result['solver_name']}\n")
+        detailed_file.write(f"Success: {file_result['success']}\n")
         
-        if details['solver_interpolant']:
-            interpolant = str(details['solver_interpolant'])
-            if len(interpolant) > 1000:
-                interpolant = interpolant[:1000] + "... <truncated>"
-            detailed_file.write(f"Interpolant: {interpolant}\n")
-        else:
-            detailed_file.write("Interpolant: None\n")
-    
-    detailed_file.write("\n")  # Add blank line between entries
-    detailed_file.flush()  # Ensure data is written immediately
-
-
-def get_next_run_number(output_dir: Path) -> int:
-    """
-    Get the next run number by checking existing files in the output directory.
-    
-    Args:
-        output_dir: Directory to check for existing run files
+        if file_result['error_message']:
+            detailed_file.write(f"Error: {file_result['error_message']}\n")
         
-    Returns:
-        Next available run number
-    """
-    # Look for existing files with pattern *_run_N.* 
-    existing_files = list(output_dir.glob("*_run_*.csv")) + list(output_dir.glob("*_run_*.txt"))
-    
-    if not existing_files:
-        return 1
-    
-    # Extract run numbers from existing files
-    run_numbers = []
-    for file_path in existing_files:
-        # Look for pattern like "correctness_solver_runs_run_3.csv"
-        parts = file_path.stem.split('_run_')
-        if len(parts) == 2:
-            try:
-                run_num = int(parts[1])
-                run_numbers.append(run_num)
-            except ValueError:
-                continue
-    
-    return max(run_numbers) + 1 if run_numbers else 1
+        # Write detailed results if available
+        if 'detailed_results' in file_result:
+            details = file_result['detailed_results']
+            detailed_file.write(f"Result: {details['result']}\n")
+            detailed_file.write(f"Time: {details['solver_time']:.6f}s\n")
+            
+            if details['solver_interpolant']:
+                interpolant = str(details['solver_interpolant'])
+                if len(interpolant) > 1000:
+                    interpolant = interpolant[:1000] + "... <truncated>"
+                detailed_file.write(f"Interpolant: {interpolant}\n")
+            else:
+                detailed_file.write("Interpolant: None\n")
+
 
 
 def gather_inputs(inputs_field: str) -> List[Path]:
@@ -241,7 +214,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument(
         "-d", "--detailed",
         action="store_true",
-        help="Enable detailed results logging to a text file"
+        help="Enable detailed results logging to a text file (always enabled per-file now)"
     )
     
     args = parser.parse_args(argv)
@@ -257,87 +230,49 @@ def main(argv: List[str]) -> int:
     
     # Set up output directory
     if args.output:
-        output_dir = Path(args.output)
+        base_output_dir = Path(args.output)
     else:
-        output_dir = Path.cwd() / "results"
+        base_output_dir = Path.cwd() / "results"
     
-    # Create output directory if it doesn't exist
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Create base output directory if it doesn't exist
+    base_output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Get next run number
-    run_number = get_next_run_number(output_dir)
-    
-    # Set up output file paths with run numbers
-    solver_csv_path = output_dir / f"solver_runs_run_{run_number}.csv"
-    
-    detailed_results_path = None
-    if args.detailed:
-        detailed_results_path = output_dir / f"detailed_results_run_{run_number}.txt"
+    # Create run directory with timestamp and solver name
+    timestamp = int(time.time())
+    run_dir = base_output_dir / f"run_results_{timestamp}" / args.solver
+    run_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"Solver             : {args.solver}")
     print(f"Input files        : {len(input_files)} files")
-    print(f"Output directory   : {output_dir}")
-    print(f"Run number         : {run_number}")
+    print(f"Output directory   : {run_dir}")
+    print(f"Run ID             : {timestamp}")
     print(f"Timeout per solver : {args.timeout} seconds ({args.timeout/60:.1f} minutes)")
-    print(f"Solver runs CSV    : {solver_csv_path}")
     
-    if detailed_results_path:
-        print(f"Detailed results   : {detailed_results_path}")
-    else:
-        print(f"Detailed results   : (disabled)")
-        
     print(f"Processing files in: {args.inputs}\n")
     
-    # Prepare CSV writer and detailed results file
-    detailed_file = None
+    failures = 0
     
-    # We manage file opening manually to handle the conditional detailed_file
-    try:
-        if detailed_results_path:
-            detailed_file = detailed_results_path.open("w", encoding="utf-8")
-            # Write header to detailed results file
-            detailed_file.write(f"Detailed Results - Run {run_number}\n")
-            detailed_file.write(f"Solver: {args.solver}\n")
-            detailed_file.write(f"Generated for {len(input_files)} input files\n")
-            detailed_file.write("=" * 50 + "\n\n")
-            
-        with solver_csv_path.open("w", newline="", encoding="utf-8") as solver_csv_file:
-            solver_csv_writer = csv.writer(solver_csv_file)
-            
-            # Always write headers since we're creating new files
-            solver_csv_writer.writerow(["solver", "input_file", "time_seconds", "result", "interpolant_produced", "error"])
-            
-            failures = 0
-            
-            # Process each file
-            for smt_file in input_files:
-                print(f"=== Processing {smt_file.name} ===")
-                print(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-                
-                # Process the file and get results
-                file_result = process_file(str(smt_file), solver, args.timeout)
-                
-                # Write results to CSV files and detailed results file
-                write_results(file_result, solver_csv_writer, detailed_file)
-                
-                # Flush CSV files after each file
-                solver_csv_file.flush()
-                if detailed_file:
-                    detailed_file.flush()
-                
-                # Track failures and provide feedback
-                if not file_result['success']:
-                    failures += 1
-                    print(f"FAILURE: {smt_file.name}")
-                    if file_result['error_message']:
-                        print(f"  Error: {file_result['error_message']}")
-                else:
-                    print(f"SUCCESS: {smt_file.name}")
-                print()
-    finally:
-        if detailed_file:
-            detailed_file.close()
-    
+    # Process each file
+    for smt_file in input_files:
+        print(f"=== Processing {smt_file.name} ===")
+        print(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Process the file and get results
+        file_result = process_file(str(smt_file), solver, args.timeout)
+        
+        # Write results to individual files
+        write_results(file_result, run_dir)
+        
+        # Track failures and provide feedback
+        if not file_result['success']:
+            failures += 1
+            print(f"FAILURE: {smt_file.name}")
+            if file_result['error_message']:
+                print(f"  Error: {file_result['error_message']}")
+        else:
+            print(f"SUCCESS: {smt_file.name}")
+        print()
+
     print(f"\nSummary: {failures} failures out of {len(input_files)} files")
     return 1 if failures else 0
 
