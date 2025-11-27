@@ -17,8 +17,10 @@ The script tracks run numbers automatically in the output directory.
 """
 from __future__ import annotations
 import argparse
+import concurrent.futures
 import csv
 import sys
+import threading
 import time
 import subprocess
 from pathlib import Path
@@ -56,10 +58,7 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
     
     try:
         # Run the solver on the input file
-        print(f"Running {solver.name}...")
         result_val, interpolant, time_val, stdout, stderr = solver.run(path, timeout)
-        
-        print(f"Result: {solver.name}={result_val} ({time_val:.3f}s)")
         
         # Store individual solver run results
         result['solver_run'] = {
@@ -75,7 +74,6 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
         if result_val == "unsat":
             if interpolant is None:
                 error_msg = f"{solver.name} did not produce an interpolant for UNSAT formula"
-                print(f"ERROR: {error_msg}")
                 result['error_message'] = error_msg
                 result['solver_run']['error'] = error_msg
                 # We still return the result so it gets logged, but success remains False
@@ -189,6 +187,51 @@ def gather_inputs(inputs_field: str) -> List[Path]:
         sys.exit(f"Error: Input path does not exist: {target}")
 
 
+def process_single_input(
+    smt_file: Path, 
+    solver_name: str, 
+    timeout: int, 
+    run_dir: Path, 
+    print_lock: threading.Lock, 
+    detailed: bool = False
+) -> bool:
+    """
+    Process a single input file: create solver, run processing, write results, log output.
+    Returns True if failure occurred, False otherwise (to sum failures).
+    """
+    # Create solver instance per thread to ensure safety/independence
+    try:
+        solver = create_solver(solver_name)
+    except Exception as e:
+        with print_lock:
+            print(f"Error creating solver for {smt_file.name}: {e}")
+        return True  # Failure
+    
+    with print_lock:
+        print(f"=== Processing {smt_file.name} ===")
+        print(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Run the main processing logic
+    file_result = process_file(str(smt_file), solver, timeout)
+    
+    # Write results to disk (thread-safe as files are distinct per input)
+    write_results(file_result, run_dir, detailed)
+    
+    success = file_result['success']
+    
+    with print_lock:
+        # Print result summary
+        if not success:
+            print(f"FAILURE: {smt_file.name}")
+            if file_result['error_message']:
+                print(f"  Error: {file_result['error_message']}")
+        else:
+            print(f"SUCCESS: {smt_file.name}")
+        print()  # Blank line between entries
+        
+    return not success
+
+
 def main(argv: List[str]) -> int:
     """Main function to run a single SMT solver on inputs."""
     parser = argparse.ArgumentParser(
@@ -218,12 +261,19 @@ def main(argv: List[str]) -> int:
         action="store_true",
         help="Enable detailed results logging to a text file (default: disabled)"
     )
+    parser.add_argument(
+        "-j", "--jobs",
+        type=int,
+        default=1,
+        help="Number of parallel jobs/threads to use (default: 1)"
+    )
     
     args = parser.parse_args(argv)
     
-    # Create solver instance
+    # Check if solver creation works (just to fail early if solver is missing)
     try:
-        solver = create_solver(args.solver)
+        # We just check if we can create one, but we'll create fresh ones in threads
+        _ = create_solver(args.solver)
     except (FileNotFoundError, ValueError) as e:
         sys.exit(f"Error creating solver: {e}")
     
@@ -246,35 +296,46 @@ def main(argv: List[str]) -> int:
     
     print(f"Solver             : {args.solver}")
     print(f"Input files        : {len(input_files)} files")
+    print(f"Processing files in: {args.inputs}")
     print(f"Output directory   : {run_dir}")
     print(f"Run ID             : {timestamp}")
     print(f"Timeout per solver : {args.timeout} seconds ({args.timeout/60:.1f} minutes)")
     print(f"Detailed output    : {'enabled' if args.detailed else 'disabled'}")
-    
-    print(f"Processing files in: {args.inputs}\n")
+    print(f"Parallel jobs      : {args.jobs}")
+    print()
     
     failures = 0
     
-    # Process each file
-    for smt_file in input_files:
-        print(f"=== Processing {smt_file.name} ===")
-        print(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    # Lock for synchronizing print output
+    print_lock = threading.Lock()
+
+    # Use ThreadPoolExecutor for parallel processing
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
+        # Submit all tasks
+        future_to_file = {
+            executor.submit(
+                process_single_input, 
+                smt_file, 
+                args.solver, 
+                args.timeout, 
+                run_dir, 
+                print_lock, 
+                args.detailed
+            ): smt_file
+            for smt_file in input_files
+        }
         
-        # Process the file and get results
-        file_result = process_file(str(smt_file), solver, args.timeout)
-        
-        # Write results to individual files
-        write_results(file_result, run_dir, args.detailed)
-        
-        # Track failures and provide feedback
-        if not file_result['success']:
-            failures += 1
-            print(f"FAILURE: {smt_file.name}")
-            if file_result['error_message']:
-                print(f"  Error: {file_result['error_message']}")
-        else:
-            print(f"SUCCESS: {smt_file.name}")
-        print()
+        # Process results as they complete
+        for future in concurrent.futures.as_completed(future_to_file):
+            smt_file = future_to_file[future]
+            try:
+                is_failure = future.result()
+                if is_failure:
+                    failures += 1
+            except Exception as exc:
+                with print_lock:
+                    print(f"Generated an exception for {smt_file.name}: {exc}")
+                failures += 1
 
     print(f"\nSummary: {failures} failures out of {len(input_files)} files")
     return 1 if failures else 0
