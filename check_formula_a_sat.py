@@ -153,7 +153,7 @@ def main():
     parser.add_argument(
         "-t", "--timeout", 
         type=int, 
-        default=200, 
+        default=600, 
         help="Timeout in seconds (default: 200)"
     )
     
