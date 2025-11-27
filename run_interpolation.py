@@ -119,19 +119,19 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
         return result
 
 
-def write_results(file_result: Dict[str, Any], output_dir: Path) -> None:
+def write_results(file_result: Dict[str, Any], output_dir: Path, detailed: bool = False) -> None:
     """
-    Write the results from process_file to individual CSV and detailed files.
+    Write the results from process_file to individual CSV and optionally detailed files.
     
     Args:
         file_result: Dictionary containing all results from process_file
         output_dir: Directory to save the results
+        detailed: Whether to write detailed results file (default: False)
     """
     file_name = file_result['file_name']
     base_name = Path(file_name).stem
     
     csv_path = output_dir / f"{base_name}_results.csv"
-    detailed_path = output_dir / f"{base_name}_results_detailed.txt"
 
     # Write solver run to CSV
     run = file_result['solver_run']
@@ -148,28 +148,30 @@ def write_results(file_result: Dict[str, Any], output_dir: Path) -> None:
                 run['error']
             ])
     
-    # Write detailed results file
-    with detailed_path.open("w", encoding="utf-8") as detailed_file:
-        detailed_file.write(f"=== {file_result['file_name']} ===\n")
-        detailed_file.write(f"Solver: {file_result['solver_name']}\n")
-        detailed_file.write(f"Success: {file_result['success']}\n")
-        
-        if file_result['error_message']:
-            detailed_file.write(f"Error: {file_result['error_message']}\n")
-        
-        # Write detailed results if available
-        if 'detailed_results' in file_result:
-            details = file_result['detailed_results']
-            detailed_file.write(f"Result: {details['result']}\n")
-            detailed_file.write(f"Time: {details['solver_time']:.6f}s\n")
+    # Write detailed results file only if requested
+    if detailed:
+        detailed_path = output_dir / f"{base_name}_results_detailed.txt"
+        with detailed_path.open("w", encoding="utf-8") as detailed_file:
+            detailed_file.write(f"=== {file_result['file_name']} ===\n")
+            detailed_file.write(f"Solver: {file_result['solver_name']}\n")
+            detailed_file.write(f"Success: {file_result['success']}\n")
             
-            if details['solver_interpolant']:
-                interpolant = str(details['solver_interpolant'])
-                if len(interpolant) > 1000:
-                    interpolant = interpolant[:1000] + "... <truncated>"
-                detailed_file.write(f"Interpolant: {interpolant}\n")
-            else:
-                detailed_file.write("Interpolant: None\n")
+            if file_result['error_message']:
+                detailed_file.write(f"Error: {file_result['error_message']}\n")
+            
+            # Write detailed results if available
+            if 'detailed_results' in file_result:
+                details = file_result['detailed_results']
+                detailed_file.write(f"Result: {details['result']}\n")
+                detailed_file.write(f"Time: {details['solver_time']:.6f}s\n")
+                
+                if details['solver_interpolant']:
+                    interpolant = str(details['solver_interpolant'])
+                    if len(interpolant) > 1000:
+                        interpolant = interpolant[:1000] + "... <truncated>"
+                    detailed_file.write(f"Interpolant: {interpolant}\n")
+                else:
+                    detailed_file.write("Interpolant: None\n")
 
 
 
@@ -214,7 +216,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument(
         "-d", "--detailed",
         action="store_true",
-        help="Enable detailed results logging to a text file (always enabled per-file now)"
+        help="Enable detailed results logging to a text file (default: disabled)"
     )
     
     args = parser.parse_args(argv)
@@ -247,6 +249,7 @@ def main(argv: List[str]) -> int:
     print(f"Output directory   : {run_dir}")
     print(f"Run ID             : {timestamp}")
     print(f"Timeout per solver : {args.timeout} seconds ({args.timeout/60:.1f} minutes)")
+    print(f"Detailed output    : {'enabled' if args.detailed else 'disabled'}")
     
     print(f"Processing files in: {args.inputs}\n")
     
@@ -261,7 +264,7 @@ def main(argv: List[str]) -> int:
         file_result = process_file(str(smt_file), solver, args.timeout)
         
         # Write results to individual files
-        write_results(file_result, run_dir)
+        write_results(file_result, run_dir, args.detailed)
         
         # Track failures and provide feedback
         if not file_result['success']:
