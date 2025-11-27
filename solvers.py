@@ -238,17 +238,16 @@ class Yaga(InterpolantSolver):
         Postprocess Yaga output to extract interpolant:
         - Returns the second line from the input
         """
-        # lines = raw_output.strip().split('\n')
+        lines = raw_output.strip().split('\n')
         
         # Filter out empty lines
-        # non_empty_lines = [line.strip() for line in lines if line.strip()]
+        non_empty_lines = [line.strip() for line in lines if line.strip()]
         
-        # if len(non_empty_lines) < 2:
-        #     return None
+        if len(non_empty_lines) < 2:
+            return None
         
         # Return the second line
-        # return non_empty_lines[1].strip()
-        return ""
+        return non_empty_lines[1].strip()
 
 class OpenSMT(InterpolantSolver):
     
@@ -307,28 +306,29 @@ class OpenSMT(InterpolantSolver):
         - Remove outermost brackets if they exist
         - Replace num1/num2 format with (/ num1 num2)
         """
-        lines = raw_output.strip().split('\n')
+        # lines = raw_output.strip().split('\n')
         
         # Filter out empty lines
-        non_empty_lines = [line.strip() for line in lines if line.strip()]
+        # non_empty_lines = [line.strip() for line in lines if line.strip()]
         
-        if len(non_empty_lines) < 2:
-            return None
+        # if len(non_empty_lines) < 2:
+        #     return None
         
         # First line should be sat/unsat, second line should be interpolant
-        interpolant = non_empty_lines[1]
+        # interpolant = non_empty_lines[1]
         
         # Remove outermost brackets if they exist
-        interpolant = interpolant.strip()
-        if interpolant.startswith('(') and interpolant.endswith(')'):
-            interpolant = interpolant[1:-1]
+        # interpolant = interpolant.strip()
+        # if interpolant.startswith('(') and interpolant.endswith(')'):
+        #     interpolant = interpolant[1:-1]
         
         # Replace num1/num2 format with (/ num1 num2)
         # Pattern to match numbers in fraction format (e.g., 1/2, 3/4, etc.)
-        pattern = r'(\d+)/(\d+)'
-        interpolant = re.sub(pattern, r'(/ \1 \2)', interpolant)
+        # pattern = r'(\d+)/(\d+)'
+        # interpolant = re.sub(pattern, r'(/ \1 \2)', interpolant)
         
-        return interpolant.strip()
+        # return interpolant.strip()
+        return ""
 
 class Z3(InterpolantSolver):
     
