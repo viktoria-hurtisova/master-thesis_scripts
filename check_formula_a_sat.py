@@ -54,7 +54,7 @@ def create_a_only_file(source_path: str) -> str:
     
     return str(output_path)
 
-def check_a_sat(file_path: str, timeout_log: str, timeout: int = 200) -> str:
+def check_a_sat(file_path: str, timeout_log: str, timeout: int = 900) -> str:
     """
     Runs Z3 on the file containing only Formula A.
     Returns status: 'deleted', 'kept', 'timeout', or 'error'.
@@ -153,8 +153,8 @@ def main():
     parser.add_argument(
         "-t", "--timeout", 
         type=int, 
-        default=600, 
-        help="Timeout in seconds (default: 200)"
+        default=900, 
+        help="Timeout in seconds (default: 900)"
     )
     
     args = parser.parse_args()
