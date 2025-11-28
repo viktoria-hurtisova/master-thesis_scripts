@@ -428,14 +428,27 @@ def write_results(file_result: Dict[str, Any], output_dir: Path, detailed: bool 
 
 
 def gather_inputs(inputs_field: str) -> List[Path]:
-    """Return a list of *.smt2 files to feed to the solver."""
+    """Return a list of *.smt2 files to feed to the solver.
+    
+    Excludes temp files from preprocessing (patterns like *_pre_*.smt2 and *.verification_*.smt2).
+    """
     target = Path(inputs_field).expanduser().resolve()
+    
+    # Pattern to exclude temp/preprocessing files
+    temp_patterns = ['_pre_', '.verification_']
+    
+    def is_temp_file(f: Path) -> bool:
+        return any(pattern in f.name for pattern in temp_patterns)
+    
     if target.is_dir():
-        files = sorted(target.glob("*.smt2"))
+        all_files = sorted(target.glob("*.smt2"))
+        files = [f for f in all_files if not is_temp_file(f)]
         if not files:
             sys.exit(f"Error: No .smt2 files found in directory {target}")
         return files
     elif target.is_file():
+        if is_temp_file(target):
+            sys.exit(f"Error: Input file appears to be a temp file: {target}")
         return [target]
     else:
         sys.exit(f"Error: Input path does not exist: {target}")
