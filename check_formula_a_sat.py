@@ -6,7 +6,7 @@ and runs the Z3 solver on it.
 Behavior:
 - If Formula A is UNSAT or solver errors -> Original file is DELETED.
 - If Formula A is SAT -> Original file is KEPT.
-- If solver times out -> Original file is KEPT, and its path is appended to 'timed_out_files.txt' in the input directory.
+- If solver times out -> Original file is KEPT.
 
 Can process a single file or a directory of .smt2 files.
 """
@@ -54,10 +54,11 @@ def create_a_only_file(source_path: str) -> str:
     
     return str(output_path)
 
-def check_a_sat(file_path: str, timeout_log: str, timeout: int = 900) -> str:
+def check_a_sat(file_path: str, timeout: int = 900) -> str:
     """
     Runs Z3 on the file containing only Formula A.
     Returns status: 'deleted', 'kept', 'timeout', or 'error'.
+    Note: Files that time out are kept (not deleted).
     """
     temp_file = None
     try:
@@ -104,18 +105,8 @@ def check_a_sat(file_path: str, timeout_log: str, timeout: int = 900) -> str:
 
     except Exception as e:
         if "timed out" in str(e).lower():
-            print(f"-> Solver timed out. Keeping file and logging to {timeout_log}")
-            try:
-                # Ensure directory exists (should exist as it's input dir or parent)
-                log_path = Path(timeout_log)
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                with open(timeout_log, "a") as f:
-                    f.write(f"{file_path}\n")
-                return "timeout"
-            except Exception as io_err:
-                print(f"Error writing to timeout log: {io_err}")
-                return "error"
+            print(f"-> Solver timed out. Keeping file.")
+            return "timeout"
 
         print(f"Error processing {file_path}: {e}")
         print(f"-> Deleting file due to exception.")
@@ -165,13 +156,6 @@ def main():
         print(f"Error: No input files found at '{args.input_path}'")
         sys.exit(1)
 
-    # Determine timeout log file path
-    input_path_obj = Path(args.input_path).expanduser().resolve()
-    if input_path_obj.is_dir():
-        timeout_log = input_path_obj / "_timed_out_files.txt"
-    else:
-        timeout_log = input_path_obj.parent / "_timed_out_files.txt"
-
     stats = {
         "total": len(files),
         "deleted": 0,
@@ -181,12 +165,12 @@ def main():
     }
     
     print(f"Found {len(files)} files to process.")
-    print(f"Timeout log will be written to: {timeout_log}")
+    print("Note: Files that time out will be kept (not deleted).")
     print("=" * 60)
     
     for i, f in enumerate(files, 1):
         print(f"[{i}/{len(files)}] Processing: {f.name}")
-        status = check_a_sat(str(f), str(timeout_log), args.timeout)
+        status = check_a_sat(str(f), args.timeout)
         stats[status] += 1
         print("-" * 60)
 
