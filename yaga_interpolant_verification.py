@@ -430,6 +430,7 @@ def write_results(file_result: Dict[str, Any], output_dir: Path, detailed: bool 
 def gather_inputs(inputs_field: str) -> List[Path]:
     """Return a list of *.smt2 files to feed to the solver.
     
+    Recursively searches subdirectories when a directory is provided.
     Excludes temp files from preprocessing (patterns like *_pre_*.smt2 and *.verification_*.smt2).
     """
     target = Path(inputs_field).expanduser().resolve()
@@ -441,7 +442,7 @@ def gather_inputs(inputs_field: str) -> List[Path]:
         return any(pattern in f.name for pattern in temp_patterns)
     
     if target.is_dir():
-        all_files = sorted(target.glob("*.smt2"))
+        all_files = sorted(target.rglob("*.smt2"))
         files = [f for f in all_files if not is_temp_file(f)]
         if not files:
             sys.exit(f"Error: No .smt2 files found in directory {target}")
