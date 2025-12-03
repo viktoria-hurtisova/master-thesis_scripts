@@ -60,6 +60,10 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
         # Run the solver on the input file
         result_val, interpolant, time_val, stdout, stderr = solver.run(path, timeout)
         
+        # Store solver output
+        result['solver_stdout'] = stdout
+        result['solver_stderr'] = stderr
+        
         # Store individual solver run results
         result['solver_run'] = {
             'solver': solver.name, 
@@ -70,13 +74,50 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
             'error': None
         }
         
+        # Check for errors in stderr
+        if stderr and stderr.strip():
+            error_msg = f"Solver produced error output in stderr"
+            result['error_message'] = error_msg
+            result['solver_run']['result'] = "stderr_error"
+            result['solver_run']['error'] = error_msg
+            # Store detailed results for file output even on error
+            result['detailed_results'] = {
+                'file_name': file_path.name,
+                'result': "stderr_error",
+                'solver_time': time_val,
+                'solver_interpolant': interpolant
+            }
+            return result
+        
+        # Check for errors in stdout
+        if stdout and "error" in stdout.lower():
+            error_msg = f"Solver produced error in stdout"
+            result['error_message'] = error_msg
+            result['solver_run']['result'] = "stdout_error"
+            result['solver_run']['error'] = error_msg
+            # Store detailed results for file output even on error
+            result['detailed_results'] = {
+                'file_name': file_path.name,
+                'result': "stdout_error",
+                'solver_time': time_val,
+                'solver_interpolant': interpolant
+            }
+            return result
+        
         # If UNSAT, should produce interpolant
         if result_val == "unsat":
             if interpolant is None:
                 error_msg = f"{solver.name} did not produce an interpolant for UNSAT formula"
                 result['error_message'] = error_msg
+                result['solver_run']['result'] = "no_interpolant"
                 result['solver_run']['error'] = error_msg
-                # We still return the result so it gets logged, but success remains False
+                # Store detailed results for file output even on error
+                result['detailed_results'] = {
+                    'file_name': file_path.name,
+                    'result': "no_interpolant",
+                    'solver_time': time_val,
+                    'solver_interpolant': None
+                }
                 return result
             
         # Store detailed results for file output
@@ -93,6 +134,8 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
     except subprocess.TimeoutExpired:
         error_msg = f"Solver execution timed out after {timeout} seconds"
         result['error_message'] = error_msg
+        result['solver_stdout'] = result.get('solver_stdout', "")
+        result['solver_stderr'] = result.get('solver_stderr', "")
         result['solver_run'] = {
             'solver': solver.name, 
             'input_file': file_path.name, 
@@ -106,6 +149,8 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
     except Exception as e:
         error_msg = f"Exception during processing: {e}"
         result['error_message'] = error_msg
+        result['solver_stdout'] = result.get('solver_stdout', "")
+        result['solver_stderr'] = result.get('solver_stderr', "")
         result['solver_run'] = {
             'solver': solver.name, 
             'input_file': file_path.name, 
@@ -170,14 +215,38 @@ def write_results(file_result: Dict[str, Any], output_dir: Path, detailed: bool 
                     detailed_file.write(f"Interpolant: {interpolant}\n")
                 else:
                     detailed_file.write("Interpolant: None\n")
+            elif file_result['solver_run']:
+                # Fallback to solver_run info for timeout/exception cases
+                run = file_result['solver_run']
+                detailed_file.write(f"Result: {run['result']}\n")
+                detailed_file.write(f"Time: {run['time_seconds']}s\n")
+                detailed_file.write(f"Interpolant: None\n")
+            
+            # Write solver output (stdout and stderr)
+            detailed_file.write("\n--- Solver Output (STDOUT) ---\n")
+            solver_stdout = file_result.get('solver_stdout', "")
+            if solver_stdout:
+                detailed_file.write(solver_stdout)
+            else:
+                detailed_file.write("(empty)\n")
+            
+            detailed_file.write("\n--- Solver Output (STDERR) ---\n")
+            solver_stderr = file_result.get('solver_stderr', "")
+            if solver_stderr:
+                detailed_file.write(solver_stderr)
+            else:
+                detailed_file.write("(empty)\n")
 
 
 
 def gather_inputs(inputs_field: str) -> List[Path]:
-    """Return a list of *.smt2 files to feed to the solver."""
+    """Return a list of *.smt2 files to feed to the solver.
+    
+    Recursively searches subdirectories when a directory is provided.
+    """
     target = Path(inputs_field).expanduser().resolve()
     if target.is_dir():
-        files = sorted(target.glob("*.smt2"))
+        files = sorted(target.rglob("*.smt2"))
         if not files:
             sys.exit(f"Error: No .smt2 files found in directory {target}")
         return files
