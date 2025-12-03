@@ -145,6 +145,11 @@ def transform(text: str) -> str | None:
     """Rewrite a single SMT-LIB text, return new text, or None if bipartition should be skipped."""
     lines = text.splitlines()
     
+    # Skip files containing declare-sort
+    for line in lines:
+        if line.strip().startswith("(declare-sort"):
+            return None
+    
     # Collect all assert lines
     assert_lines = []
     for line in lines:
