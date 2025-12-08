@@ -1,3 +1,28 @@
+"""run_solver_generic.py
+
+A generic SMT-LIB solver runner driven by a JSON configuration file.
+
+This script:
+1. Loads solver configuration from a JSON file (name, path, options).
+2. Runs the specified solver on a set of input .smt2 files.
+3. Captures the result (SAT/UNSAT) and execution time for each file.
+4. Logs all results to a CSV file for later analysis.
+
+Usage::
+
+    $ python scripts/run_solver_generic.py config.json inputs/benchmark_dir
+    $ python scripts/run_solver_generic.py mathsat_config.json inputs/single_file.smt2
+
+JSON Config Format:
+    Required fields:
+        - solver_name  : Label for CSV output (e.g., "mathsat", "z3", "yaga")
+        - solver_path  : Path to the solver executable
+
+    Optional fields:
+        - pass_via_stdin : true/false (default: true for MathSAT, false otherwise)
+
+Results are written to: results_<solver_name>.csv in the project root directory.
+"""
 import argparse
 import csv
 import json
