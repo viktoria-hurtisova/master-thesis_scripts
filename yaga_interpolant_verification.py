@@ -40,6 +40,53 @@ except ImportError:
 # Verification
 # =========================
 
+def extract_define_fun_mappings(content: str) -> Dict[str, str]:
+    """
+    Extract mappings from define-fun statements where the body is a simple variable reference.
+    
+    For statements like: (define-fun _77 () Real |main::sn@1|)
+    Creates a mapping: {"main::sn@1": "_77"}
+    
+    This maps the original quoted symbol names (without pipes) to their internal aliases.
+    """
+    mappings = {}
+    # Match define-fun where the body is a quoted symbol (|...|)
+    # Pattern: (define-fun ALIAS () TYPE |ORIGINAL_NAME|)
+    pattern = r'\(define-fun\s+(\w+)\s+\(\)\s+\w+\s+\|([^|]+)\|\s*\)'
+    for match in re.finditer(pattern, content):
+        alias = match.group(1)  # e.g., "_77"
+        original_name = match.group(2)  # e.g., "main::sn@1"
+        mappings[original_name] = alias
+    return mappings
+
+
+def replace_constants_in_interpolant(interpolant: str, mappings: Dict[str, str]) -> str:
+    """
+    Replace original variable names in the interpolant with their internal aliases.
+    
+    For example, if mappings = {"main::sn@1": "_77"}, then
+    "(or (>= (+ (- 1) main::sn@1) 0) ...)" becomes
+    "(or (>= (+ (- 1) _77) 0) ...)"
+    
+    The replacement handles variable names that may appear:
+    - As bare identifiers (e.g., main::sn@1)
+    - Surrounded by parentheses or spaces
+    """
+    result = interpolant
+    # Sort mappings by length of original name (longest first) to avoid partial replacements
+    sorted_mappings = sorted(mappings.items(), key=lambda x: len(x[0]), reverse=True)
+    
+    for original_name, alias in sorted_mappings:
+        # Replace the original name with the alias
+        # Use a pattern that matches the name when it's not part of a larger identifier
+        # SMT-LIB identifiers can contain letters, digits, and some special chars like : @ _
+        # We need to be careful not to replace partial matches
+        # The name is typically surrounded by spaces, parentheses, or end of string
+        pattern = r'(?<![a-zA-Z0-9_@:|])' + re.escape(original_name) + r'(?![a-zA-Z0-9_@:|])'
+        result = re.sub(pattern, alias, result)
+    return result
+
+
 def _strip_named_wrapper(assert_body: str) -> str:
     """
     Remove SMT-LIB attribute wrapper: (! phi :named A)
@@ -72,6 +119,11 @@ def create_verification_input_file(source_path: str, interpolant: str) -> str:
     # But the logic runs one file once per run.
     # Parallelization is across *different* files.
     output_path = source_path_obj.with_name(f"{source_path_obj.stem}.verification_{timestamp}_{threading.get_ident()}.smt2")
+
+    # Extract mappings from define-fun statements (e.g., _77 -> main::sn@1)
+    # and replace constants in the interpolant with their internal aliases
+    mappings = extract_define_fun_mappings(content)
+    interpolant_replaced = replace_constants_in_interpolant(interpolant, mappings)
 
     # process the file to extract A and B
     lines = content.split('\n')
@@ -107,7 +159,7 @@ def create_verification_input_file(source_path: str, interpolant: str) -> str:
             continue
         processed_lines.append(line)
 
-    processed_lines.append(f'(assert (and (=> {a_formula} {interpolant}) (=> {interpolant} (not {b_formula}))))')
+    processed_lines.append(f'(assert (and (=> {a_formula} {interpolant_replaced}) (=> {interpolant_replaced} (not {b_formula}))))')
     processed_lines.append('(check-sat)')
     processed_lines.append('(exit)')
 
