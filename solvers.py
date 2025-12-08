@@ -91,9 +91,9 @@ class InterpolantSolver(ABC):
 
             return sat_result, interpolant, elapsed, stdout, stderr
             
-        except subprocess.TimeoutExpired as e:
-            elapsed = time.perf_counter() - start_time
-            raise RuntimeError(f"Solver execution timed out after {timeout} seconds: {e}") from e
+        except subprocess.TimeoutExpired:
+            # Let timeout propagate directly so callers can handle it properly
+            raise
         except Exception as e:
             elapsed = time.perf_counter() - start_time
             # Return empty strings for stdout/stderr on exception
