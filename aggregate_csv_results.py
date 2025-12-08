@@ -6,13 +6,17 @@ This script:
 1. Takes a directory containing CSV files as input.
 2. Reads all CSV files in the directory.
 3. Aggregates their contents into a single CSV file.
-4. Saves the result as {directory_name}_aggregated.csv inside the directory.
+4. Saves the result as {directory_name}_aggregated.csv (in input dir or specified output dir).
 
 Usage::
 
-    $ python scripts/aggregate_csv_results.py results/run_results_123/yaga
+    $ python scripts/aggregate_csv_results.py results/mathsat/run_results_123
     
-This will create results/run_results_123/yaga/yaga_aggregated.csv
+This will create results/mathsat/run_results_123/run_results_123_aggregated.csv
+
+    $ python scripts/aggregate_csv_results.py results/mathsat/run_results_123 -o results/aggregated
+    
+This will create results/aggregated/run_results_123_aggregated.csv
 """
 from __future__ import annotations
 import argparse
@@ -31,12 +35,13 @@ def gather_csv_files(directory: Path) -> List[Path]:
     return files
 
 
-def aggregate_csvs(input_dir: Path) -> Path:
+def aggregate_csvs(input_dir: Path, output_dir: Path | None = None) -> Path:
     """
     Aggregate all CSV files in the input directory into a single file.
     
     Args:
         input_dir: Directory containing CSV files to aggregate
+        output_dir: Optional directory to save the aggregated file (defaults to input_dir)
         
     Returns:
         Path to the created aggregated file
@@ -46,8 +51,11 @@ def aggregate_csvs(input_dir: Path) -> Path:
     if not csv_files:
         raise ValueError(f"No CSV files found in {input_dir}")
     
-    # Output file named after the directory
-    output_file = input_dir / f"{input_dir.name}_aggregated.csv"
+    # Determine output directory (use input_dir if not specified)
+    dest_dir = output_dir if output_dir else input_dir
+    
+    # Output file named after the input directory
+    output_file = dest_dir / f"{input_dir.name}_aggregated.csv"
     
     all_rows: List[List[str]] = []
     header: List[str] = []
@@ -91,6 +99,10 @@ def main(argv: List[str]) -> int:
         "input_dir",
         help="Directory containing CSV files to aggregate"
     )
+    parser.add_argument(
+        "-o", "--output",
+        help="Destination directory for the aggregated file (default: same as input_dir)"
+    )
     
     args = parser.parse_args(argv)
     
@@ -99,8 +111,14 @@ def main(argv: List[str]) -> int:
     if not input_dir.is_dir():
         sys.exit(f"Error: {input_dir} is not a directory")
     
+    # Handle optional output directory
+    output_dir = None
+    if args.output:
+        output_dir = Path(args.output).expanduser().resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+    
     try:
-        output_file = aggregate_csvs(input_dir)
+        output_file = aggregate_csvs(input_dir, output_dir)
         csv_files = gather_csv_files(input_dir)
         print(f"Aggregated {len(csv_files)} CSV files into: {output_file}")
         return 0
