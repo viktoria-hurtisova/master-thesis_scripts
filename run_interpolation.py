@@ -13,7 +13,10 @@ Usage::
     $ python scripts/run_interpolation.py mathsat inputs/benchmark_dir -t 600
     $ python scripts/run_interpolation.py yaga inputs/single_file.smt2
 
-The script tracks run numbers automatically in the output directory.
+Results are organized by solver name and run number:
+    results/<solver_name>/run_results_<num>/
+    
+Example: results/mathsat/run_results_1/, results/mathsat/run_results_2/, etc.
 """
 from __future__ import annotations
 import argparse
@@ -358,9 +361,13 @@ def main(argv: List[str]) -> int:
     # Create base output directory if it doesn't exist
     base_output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create run directory with timestamp and solver name
+    # Create solver-specific directory (e.g., results/mathsat/)
+    solver_dir = base_output_dir / args.solver
+    solver_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create run directory with timestamp (e.g., results/mathsat/run_results_1733567890/)
     timestamp = int(time.time())
-    run_dir = base_output_dir / f"run_results_{timestamp}" / args.solver
+    run_dir = solver_dir / f"run_results_{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"Solver             : {args.solver}")
