@@ -440,6 +440,24 @@ def main():
     else:
         print("\nNo QF_UFLRA data found")
     
+    # Combined QF_LRA + QF_UFLRA: yaga vs mathsat
+    df_combined = df[df['theory'].isin(['QF_LRA', 'QF_UFLRA'])]
+    if len(df_combined) > 0:
+        print(f"\n--- Combined QF_LRA + QF_UFLRA ({len(df_combined)} entries) ---")
+        
+        latex = create_scatter_plot(
+            df_combined, 
+            'Yaga', 
+            'MathSAT',
+            output_dir / f'{args.prefix}_combined_yaga_vs_mathsat.png',
+            title_suffix='QF_LRA + QF_UFLRA',
+            timeout=args.timeout
+        )
+        if latex:
+            latex_tables.append(f"% Combined QF_LRA + QF_UFLRA: Yaga vs MathSAT\n{latex}")
+    else:
+        print("\nNo combined data found")
+    
     # Save averaged data to CSV
     output_csv = output_dir / f'{args.prefix}_averaged_results.csv'
     df.to_csv(output_csv, index=False)
