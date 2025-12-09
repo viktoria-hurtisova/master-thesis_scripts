@@ -38,11 +38,10 @@ class InterpolantSolver(ABC):
         """
         
         processed_path = input_path  # Initialize to avoid undefined variable in finally
+        start_time = time.perf_counter()  # Initialize early to avoid undefined variable in exception handler
         try:
             # Preprocess the input file for this solver
             processed_path = self._preprocess(input_path)
-            
-            start_time = time.perf_counter()
             
             # Run the solver
             if self.pass_via_stdin:
@@ -156,6 +155,8 @@ class MathSat(InterpolantSolver):
             for line in lines:
                 # Replace :named with :interpolation-group
                 processed_line = line.replace(':named', ':interpolation-group')
+                # Rename variable 'pi' to 'pi0' to avoid MathSAT reserved constant conflict
+                processed_line = re.sub(r'\bpi\b', 'pi0', processed_line)
                 processed_lines.append(processed_line)
                 
                 # If this line contains (check-sat), add the get-interpolant command after it
