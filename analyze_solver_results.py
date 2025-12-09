@@ -115,6 +115,10 @@ def load_and_process_data(csv_directory, theory_df):
     if 'result' in combined_df.columns:
         combined_df['result'] = combined_df['result'].str.strip().str.lower()
     
+    # Count errors per solver BEFORE filtering (excluding timeout)
+    error_mask = combined_df['result'].isin(['stdout_error', 'unknown'])
+    error_counts = combined_df[error_mask].groupby('solver').size().to_dict()
+    
     # Filter out rows with stdout_error or unknown results
     initial_count = len(combined_df)
     combined_df = combined_df[~combined_df['result'].isin(['stdout_error', 'unknown'])]
@@ -146,7 +150,7 @@ def load_and_process_data(csv_directory, theory_df):
     print(f"Unique solver/file combinations after averaging: {len(averaged_df)}")
     print(f"Solvers found: {averaged_df['solver'].unique()}")
     
-    return averaged_df
+    return averaged_df, error_counts
 
 
 def get_time_bucket(time_val, timeout):
@@ -263,10 +267,10 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
     # Define markers and colors for each category
     # Using filled markers with transparency for better visibility
     marker_styles = {
-        'sat': {'marker': 's', 'color': '#2ecc71', 'alpha': 0.7, 'label': 'SAT'},
-        'unsat': {'marker': 'o', 'color': '#3498db', 'alpha': 0.6, 'label': 'UNSAT'},
-        'timeout': {'marker': '^', 'color': '#e74c3c', 'alpha': 0.8, 'label': 'timeout'},
-        'unknown': {'marker': 'D', 'color': '#95a5a6', 'alpha': 0.7, 'label': 'unknown'}
+        'sat': {'marker': 's', 'color': '#2ecc71', 'alpha': 0.7, 'label': 'SAT', 'size': 40},
+        'unsat': {'marker': 'o', 'color': '#3498db', 'alpha': 0.6, 'label': 'UNSAT', 'size': 40},
+        'timeout': {'marker': '^', 'color': '#e74c3c', 'alpha': 0.8, 'label': 'timeout', 'size': 50},
+        'unknown': {'marker': '*', 'color': '#e67e22', 'alpha': 0.9, 'label': 'error', 'size': 120}
     }
     
     # Plot each category separately
@@ -277,7 +281,7 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
                       marker=style['marker'], 
                       c=style['color'],
                       alpha=style['alpha'],
-                      s=40, label=style['label'], edgecolors='white', linewidths=0.5)
+                      s=style['size'], label=style['label'], edgecolors='white', linewidths=0.5)
     
     # Set log scale
     ax.set_xscale('log')
@@ -379,7 +383,7 @@ def main():
     print("\n" + "=" * 60)
     print("Loading and processing CSV files...")
     print("=" * 60)
-    df = load_and_process_data(args.csv_directory, theory_df)
+    df, error_counts = load_and_process_data(args.csv_directory, theory_df)
     
     # Collect all LaTeX tables
     latex_tables = []
@@ -446,6 +450,13 @@ def main():
         latex_file = output_dir / f'{args.prefix}_latex_tables.txt'
         with open(latex_file, 'w') as f:
             f.write('\n\n'.join(latex_tables))
+            
+            # Add error counts per solver at the end
+            f.write('\n\n% Error counts per solver (excluding timeout):\n')
+            all_solvers = df['solver'].unique()
+            for solver in sorted(all_solvers):
+                count = error_counts.get(solver, 0)
+                f.write(f'% {solver.capitalize()}: {count}\n')
         print(f"Saved LaTeX tables to: {latex_file}")
     
     print("\n" + "=" * 60)
