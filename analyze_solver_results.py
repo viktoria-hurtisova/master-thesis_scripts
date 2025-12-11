@@ -268,7 +268,7 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
     # Using filled markers with transparency for better visibility
     marker_styles = {
         'sat': {'marker': 's', 'color': '#2ecc71', 'alpha': 0.7, 'label': 'SAT', 'size': 40},
-        'unsat': {'marker': 'o', 'color': '#3498db', 'alpha': 0.6, 'label': 'UNSAT', 'size': 40},
+        'unsat': {'marker': 'o', 'color': '#1a5276', 'alpha': 0.6, 'label': 'UNSAT', 'size': 40},
         'timeout': {'marker': '^', 'color': '#e74c3c', 'alpha': 0.8, 'label': 'timeout', 'size': 50},
         'unknown': {'marker': '*', 'color': '#e67e22', 'alpha': 0.9, 'label': 'error', 'size': 120}
     }
@@ -296,7 +296,7 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
     max_val = max(max(x_times), max(y_times), timeout) * 1.5
     
     # Add diagonal line (y = x)
-    ax.plot([min_val, max_val], [min_val, max_val], color='#34495e', linewidth=1.2, linestyle='--', label='y = x')
+    ax.plot([min_val, max_val], [min_val, max_val], color='#bdc3c7', linewidth=1.2, linestyle='--', label='y = x')
     
     # Set axis limits
     ax.set_xlim(min_val, max_val)
