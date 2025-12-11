@@ -334,7 +334,15 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
     table = create_comparison_table(x_times, y_times, solver_x, solver_y, timeout)
     latex_table = generate_latex_table(table, solver_x, solver_y, timeout)
     
-    return latex_table
+    stats_comment = (
+        f"% Statistics:\n"
+        f"% Total files: {len(common_files)}\n"
+        f"% {solver_x} faster: {faster_x} ({100*faster_x/len(common_files):.1f}%)\n"
+        f"% {solver_y} faster: {faster_y} ({100*faster_y/len(common_files):.1f}%)\n"
+        f"% Equal: {equal}\n"
+    )
+    
+    return stats_comment + latex_table
 
 
 def main():
