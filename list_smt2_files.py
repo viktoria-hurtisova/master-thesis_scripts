@@ -1,31 +1,30 @@
 #!/usr/bin/env python3
 """
 Script to list all SMT2 files from QF_LRA_unsat and QF_UFLRA_unsat directories.
-Output format: theory,mode,filename
+Output format: theory,filename
   - theory: QF_LRA or QF_UFLRA
-  - mode: incremental or non-incremental
   - filename: name of the SMT2 file
+
+Note: Only non-incremental benchmarks are considered.
 """
 
-import os
 from pathlib import Path
 
 
 def list_smt2_files(base_dir: Path, output_file: Path):
     """
     List all SMT2 files from QF_LRA_unsat and QF_UFLRA_unsat directories.
+    Only non-incremental benchmarks are scanned.
     
     Args:
         base_dir: Base directory containing the *_unsat folders
         output_file: Path to the output file
     """
-    # Define the directories to scan
+    # Define the directories to scan (non-incremental only)
     directories = {
         "QF_LRA": base_dir / "QF_LRA_unsat",
         "QF_UFLRA": base_dir / "QF_UFLRA_unsat"
     }
-    
-    modes = ["incremental", "non-incremental"]
     
     entries = []
     
@@ -33,21 +32,15 @@ def list_smt2_files(base_dir: Path, output_file: Path):
         if not theory_dir.exists():
             print(f"Warning: Directory {theory_dir} does not exist, skipping...")
             continue
-            
-        for mode in modes:
-            mode_dir = theory_dir / mode
-            if not mode_dir.exists():
-                print(f"Warning: Directory {mode_dir} does not exist, skipping...")
-                continue
-            
-            # Find all .smt2 files in this directory (including subdirectories)
-            for smt2_file in sorted(mode_dir.rglob("*.smt2")):
-                filename = smt2_file.name
-                entries.append(f"{theory},{mode},{filename}")
+        
+        # Find all .smt2 files in this directory (including subdirectories)
+        for smt2_file in sorted(theory_dir.rglob("*.smt2")):
+            filename = smt2_file.name
+            entries.append(f"{theory},{filename}")
     
     # Write to output file
     with open(output_file, "w", encoding="utf-8") as f:
-        f.write("theory,mode,filename\n")  # Header
+        f.write("theory,filename\n")  # Header
         for entry in entries:
             f.write(entry + "\n")
     
@@ -56,9 +49,8 @@ def list_smt2_files(base_dir: Path, output_file: Path):
     # Print summary
     print("\nSummary:")
     for theory in directories.keys():
-        for mode in modes:
-            count = sum(1 for e in entries if e.startswith(f"{theory},{mode},"))
-            print(f"  {theory} / {mode}: {count} files")
+        count = sum(1 for e in entries if e.startswith(f"{theory},"))
+        print(f"  {theory}: {count} files")
 
 
 def main():
