@@ -115,42 +115,94 @@ def load_and_process_data(csv_directory, theory_df):
     if 'result' in combined_df.columns:
         combined_df['result'] = combined_df['result'].str.strip().str.lower()
     
+    # Define error result types
+    error_results = ['stdout_error', 'stderr_error', 'unknown']
+    
     # Count errors per solver BEFORE filtering (excluding timeout)
-    error_mask = combined_df['result'].isin(['stdout_error', 'unknown'])
+    error_mask = combined_df['result'].isin(error_results)
     error_counts = combined_df[error_mask].groupby('solver').size().to_dict()
     
-    # Filter out rows with stdout_error or unknown results
-    initial_count = len(combined_df)
-    combined_df = combined_df[~combined_df['result'].isin(['stdout_error', 'unknown'])]
-    filtered_count = initial_count - len(combined_df)
-    if filtered_count > 0:
-        print(f"Filtered out {filtered_count} rows with stdout_error or unknown results")
+    # Note: We keep error results in the data so they can be shown in the scatter plots
+    # with the error marker. Only filter out if you want to exclude them entirely.
+    # For now, we keep them to visualize which files caused errors.
     
-    # Group by solver and input_file, calculate mean of time_seconds
-    averaged_df = combined_df.groupby(['solver', 'input_file']).agg({
-        'time_seconds': 'mean',
-        'result': 'first',  # Take the first result (assuming consistent results)
-        'interpolant_produced': 'first',
-        'error': 'first'
-    }).reset_index()
+    # Group by solver and input_file with proper result handling
+    # Time: average of ALL runs (including timeouts and errors)
+    # Result priority: sat/unsat (success) > error > timeout
+    def aggregate_results(group):
+        # Check if any run succeeded (sat or unsat)
+        successful_runs = group[group['result'].isin(['sat', 'unsat'])]
+        
+        if len(successful_runs) > 0:
+            # Use the result from successful runs, but average ALL times
+            return pd.Series({
+                'time_seconds': group['time_seconds'].mean(),
+                'result': successful_runs['result'].iloc[0],
+                'interpolant_produced': successful_runs['interpolant_produced'].iloc[0],
+                'error': successful_runs['error'].iloc[0] if pd.notna(successful_runs['error'].iloc[0]) else ''
+            })
+        
+        # Check if any run had an error (not timeout)
+        error_runs = group[group['result'].isin(error_results)]
+        if len(error_runs) > 0:
+            # All runs either errored or timed out - use error result
+            return pd.Series({
+                'time_seconds': group['time_seconds'].mean(),
+                'result': error_runs['result'].iloc[0],  # Keep the error type
+                'interpolant_produced': False,
+                'error': error_runs['error'].iloc[0]
+            })
+        
+        # All runs timed out
+        return pd.Series({
+            'time_seconds': group['time_seconds'].mean(),
+            'result': 'timeout',
+            'interpolant_produced': False,
+            'error': group['error'].iloc[0]
+        })
     
-    # Join with theory mapping
-    averaged_df = averaged_df.merge(
-        theory_df, 
-        left_on='input_file', 
-        right_on='filename', 
-        how='left'
-    )
+    averaged_df = combined_df.groupby(['solver', 'input_file']).apply(
+        aggregate_results
+    ).reset_index()
     
-    # Check for files without theory mapping
-    unmapped = averaged_df['theory'].isna().sum()
-    if unmapped > 0:
-        print(f"Warning: {unmapped} entries have no theory mapping")
+    # Join with theory mapping (if provided)
+    if theory_df is not None:
+        averaged_df = averaged_df.merge(
+            theory_df, 
+            left_on='input_file', 
+            right_on='filename', 
+            how='left'
+        )
+        
+        # Drop the duplicate 'filename' column (same as 'input_file')
+        if 'filename' in averaged_df.columns:
+            averaged_df = averaged_df.drop(columns=['filename'])
+        
+        # Check for files without theory mapping
+        unmapped = averaged_df['theory'].isna().sum()
+        if unmapped > 0:
+            print(f"Warning: {unmapped} entries have no theory mapping")
+    else:
+        # No theory mapping provided - add empty theory column
+        averaged_df['theory'] = None
+    
+    # Count timeouts per solver (after averaging - files where all runs timed out)
+    timeout_mask = averaged_df['result'] == 'timeout'
+    timeout_counts = averaged_df[timeout_mask].groupby('solver').size().to_dict()
+    
+    # Find files that timed out for ALL solvers
+    all_solvers = averaged_df['solver'].unique()
+    num_solvers = len(all_solvers)
+    
+    # For each file, count how many solvers timed out
+    timeout_per_file = averaged_df[timeout_mask].groupby('input_file').size()
+    # Files where all solvers timed out
+    universal_timeout_files = timeout_per_file[timeout_per_file == num_solvers].index.tolist()
     
     print(f"Unique solver/file combinations after averaging: {len(averaged_df)}")
-    print(f"Solvers found: {averaged_df['solver'].unique()}")
+    print(f"Solvers found: {all_solvers}")
     
-    return averaged_df, error_counts
+    return averaged_df, error_counts, timeout_counts, universal_timeout_files
 
 
 def get_time_bucket(time_val, timeout):
@@ -180,6 +232,87 @@ def create_comparison_table(x_times, y_times, solver_x, solver_y, timeout):
         table[y_bucket, x_bucket] += 1
     
     return table
+
+
+def calculate_bucket_stats(x_times, y_times, solver_x, solver_y, timeout):
+    """
+    Calculate per-bucket statistics showing how often solver_x was faster.
+    
+    Uses the minimum time of both solvers to determine the bucket for each file.
+    
+    Args:
+        x_times: Array of times for solver_x
+        y_times: Array of times for solver_y
+        solver_x: Name of solver on x-axis
+        solver_y: Name of solver on y-axis
+        timeout: Timeout value in seconds
+        
+    Returns:
+        Dictionary with bucket statistics and formatted string for output
+    """
+    time_buckets = get_time_buckets(timeout)
+    bucket_labels = [
+        f'< 0.1s',
+        f'0.1s - 1s',
+        f'1s - 10s',
+        f'10s - {int(timeout)}s',
+        f'timeout'
+    ]
+    
+    # Initialize counters for each bucket
+    n_buckets = len(time_buckets)
+    x_faster_count = [0] * n_buckets
+    y_faster_count = [0] * n_buckets
+    equal_count = [0] * n_buckets
+    total_count = [0] * n_buckets
+    
+    for x_t, y_t in zip(x_times, y_times):
+        # Use minimum time to determine bucket (the faster solver's time)
+        min_time = min(x_t, y_t)
+        bucket = get_time_bucket(min_time, timeout)
+        
+        total_count[bucket] += 1
+        if x_t < y_t:
+            x_faster_count[bucket] += 1
+        elif y_t < x_t:
+            y_faster_count[bucket] += 1
+        else:
+            equal_count[bucket] += 1
+    
+    # Build statistics dictionary and output string
+    stats = {
+        'buckets': bucket_labels,
+        'x_faster': x_faster_count,
+        'y_faster': y_faster_count,
+        'equal': equal_count,
+        'total': total_count
+    }
+    
+    # Format output string
+    lines = [f"  Per-bucket statistics ({solver_x} faster):"]
+    for i, label in enumerate(bucket_labels):
+        if total_count[i] > 0:
+            x_pct = 100 * x_faster_count[i] / total_count[i]
+            y_pct = 100 * y_faster_count[i] / total_count[i]
+            lines.append(f"    {label:15s}: {solver_x} faster {x_faster_count[i]:4d}/{total_count[i]:4d} ({x_pct:5.1f}%), "
+                        f"{solver_y} faster {y_faster_count[i]:4d}/{total_count[i]:4d} ({y_pct:5.1f}%)")
+        else:
+            lines.append(f"    {label:15s}: no files")
+    
+    output_str = '\n'.join(lines)
+    
+    # Format for LaTeX comment
+    latex_lines = [f"% Per-bucket statistics:"]
+    for i, label in enumerate(bucket_labels):
+        if total_count[i] > 0:
+            x_pct = 100 * x_faster_count[i] / total_count[i]
+            y_pct = 100 * y_faster_count[i] / total_count[i]
+            latex_lines.append(f"% {label}: {solver_x} faster {x_faster_count[i]}/{total_count[i]} ({x_pct:.1f}%), "
+                              f"{solver_y} faster {y_faster_count[i]}/{total_count[i]} ({y_pct:.1f}%)")
+    
+    latex_str = '\n'.join(latex_lines)
+    
+    return stats, output_str, latex_str
 
 
 def generate_latex_table(table, solver_x, solver_y, timeout):
@@ -246,17 +379,21 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
     y_results = solver_y_data.loc[common_files, 'result'].values
     
     # Determine result category for each point
-    # Use the result from solver_x (or combine both)
+    # Priority: error > timeout > sat/unsat (show errors prominently)
+    error_results = ['stdout_error', 'stderr_error', 'unknown']
     categories = []
     for x_res, y_res, x_t, y_t in zip(x_results, y_results, x_times, y_times):
-        if x_t >= timeout or y_t >= timeout:
+        # Check for errors first (show them prominently)
+        if x_res in error_results or y_res in error_results:
+            categories.append('error')
+        elif x_t >= timeout or y_t >= timeout:
             categories.append('timeout')
         elif x_res == 'sat' or y_res == 'sat':
             categories.append('sat')
         elif x_res == 'unsat' or y_res == 'unsat':
             categories.append('unsat')
         else:
-            categories.append('unknown')
+            categories.append('error')  # Fallback for any other unexpected result
     
     categories = np.array(categories)
     
@@ -270,7 +407,7 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
         'sat': {'marker': 's', 'color': '#2ecc71', 'alpha': 0.7, 'label': 'SAT', 'size': 40},
         'unsat': {'marker': 'o', 'color': '#1a5276', 'alpha': 0.6, 'label': 'UNSAT', 'size': 40},
         'timeout': {'marker': '^', 'color': '#e74c3c', 'alpha': 0.8, 'label': 'timeout', 'size': 50},
-        'unknown': {'marker': '*', 'color': '#e67e22', 'alpha': 0.9, 'label': 'error', 'size': 120}
+        'error': {'marker': '*', 'color': '#e67e22', 'alpha': 0.9, 'label': 'error', 'size': 120}
     }
     
     # Plot each category separately
@@ -298,6 +435,10 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
     # Add diagonal line (y = x)
     ax.plot([min_val, max_val], [min_val, max_val], color='#bdc3c7', linewidth=1.2, linestyle='--', label='y = x')
     
+    # Add timeout lines (horizontal and vertical)
+    ax.axhline(y=timeout, color='#e74c3c', linewidth=1.2, linestyle=':', alpha=0.8, label=f'timeout ({timeout}s)')
+    ax.axvline(x=timeout, color='#e74c3c', linewidth=1.2, linestyle=':', alpha=0.8)
+    
     # Set axis limits
     ax.set_xlim(min_val, max_val)
     ax.set_ylim(min_val, max_val)
@@ -310,7 +451,7 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
     ax.set_ylabel(f'{solver_y} running time [s]', fontsize=12)
     
     # Add legend
-    ax.legend(loc='lower right', framealpha=0.95, edgecolor='gray', fancybox=True, fontsize=10)
+    ax.legend(loc='upper left', framealpha=0.95, edgecolor='gray', fancybox=True, fontsize=10)
     
     # Make it square
     ax.set_aspect('equal', adjustable='box')
@@ -330,6 +471,12 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
     print(f"  {solver_y} faster: {faster_y} ({100*faster_y/len(common_files):.1f}%)")
     print(f"  Equal: {equal}")
     
+    # Calculate and print per-bucket statistics
+    bucket_stats, bucket_output, bucket_latex = calculate_bucket_stats(
+        x_times, y_times, solver_x, solver_y, timeout
+    )
+    print(bucket_output)
+    
     # Generate comparison table
     table = create_comparison_table(x_times, y_times, solver_x, solver_y, timeout)
     latex_table = generate_latex_table(table, solver_x, solver_y, timeout)
@@ -340,6 +487,7 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
         f"% {solver_x} faster: {faster_x} ({100*faster_x/len(common_files):.1f}%)\n"
         f"% {solver_y} faster: {faster_y} ({100*faster_y/len(common_files):.1f}%)\n"
         f"% Equal: {equal}\n"
+        f"{bucket_latex}\n"
     )
     
     return stats_comment + latex_table
@@ -355,8 +503,9 @@ def main():
     )
     parser.add_argument(
         '-t', '--theory-file',
-        required=True,
-        help='CSV file mapping filenames to theories (columns: theory, mode, filename)'
+        required=False,
+        default=None,
+        help='CSV file mapping filenames to theories (columns: theory, mode, filename). If not provided, creates simple comparison plots without theory filtering.'
     )
     parser.add_argument(
         '-o', '--output-dir',
@@ -381,90 +530,136 @@ def main():
     output_dir = Path(args.output_dir) if args.output_dir else Path(args.csv_directory)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Load theory mapping
-    print("=" * 60)
-    print("Loading theory mapping...")
-    print("=" * 60)
-    theory_df = load_theory_mapping(args.theory_file)
+    # Load theory mapping (if provided)
+    theory_df = None
+    if args.theory_file:
+        print("=" * 60)
+        print("Loading theory mapping...")
+        print("=" * 60)
+        theory_df = load_theory_mapping(args.theory_file)
+    else:
+        print("=" * 60)
+        print("No theory file provided - will create simple comparison plots")
+        print("=" * 60)
     
     # Load and process data
     print("\n" + "=" * 60)
     print("Loading and processing CSV files...")
     print("=" * 60)
-    df, error_counts = load_and_process_data(args.csv_directory, theory_df)
+    df, error_counts, timeout_counts, universal_timeout_files = load_and_process_data(args.csv_directory, theory_df)
+    
+    # Print timeout statistics
+    print("\nTimeout counts per solver (files where all runs timed out):")
+    for solver in sorted(df['solver'].unique()):
+        count = timeout_counts.get(solver, 0)
+        print(f"  {solver.capitalize()}: {count}")
+    
+    # Print files that timed out for ALL solvers
+    print(f"\nFiles that timed out for ALL solvers ({len(universal_timeout_files)} files):")
+    for filename in sorted(universal_timeout_files):
+        print(f"  {filename}")
     
     # Collect all LaTeX tables
     latex_tables = []
     
-    # Create scatter plots per theory
+    # Create scatter plots
     print("\n" + "=" * 60)
     print("Creating scatter plots...")
     print("=" * 60)
     
-    # QF_LRA: yaga vs opensmt, yaga vs mathsat
-    df_qf_lra = df[df['theory'] == 'QF_LRA']
-    if len(df_qf_lra) > 0:
-        print(f"\n--- QF_LRA ({len(df_qf_lra)} entries) ---")
+    if args.theory_file:
+        # With theory mapping: create plots per theory
+        # QF_LRA: yaga vs opensmt, yaga vs mathsat
+        df_qf_lra = df[df['theory'] == 'QF_LRA']
+        if len(df_qf_lra) > 0:
+            print(f"\n--- QF_LRA ({len(df_qf_lra)} entries) ---")
+            
+            latex = create_scatter_plot(
+                df_qf_lra, 
+                'Yaga', 
+                'OpenSMT',
+                output_dir / f'{args.prefix}_QF_LRA_yaga_vs_opensmt.png',
+                title_suffix='QF_LRA',
+                timeout=args.timeout
+            )
+            if latex:
+                latex_tables.append(f"% QF_LRA: Yaga vs OpenSMT\n{latex}")
+            
+            latex = create_scatter_plot(
+                df_qf_lra, 
+                'YAGA', 
+                'MathSAT',
+                output_dir / f'{args.prefix}_QF_LRA_yaga_vs_mathsat.png',
+                title_suffix='QF_LRA',
+                timeout=args.timeout
+            )
+            if latex:
+                latex_tables.append(f"% QF_LRA: Yaga vs MathSAT\n{latex}")
+        else:
+            print("\nNo QF_LRA data found")
         
+        # QF_UFLRA: yaga vs mathsat only
+        df_qf_uflra = df[df['theory'] == 'QF_UFLRA']
+        if len(df_qf_uflra) > 0:
+            print(f"\n--- QF_UFLRA ({len(df_qf_uflra)} entries) ---")
+            
+            latex = create_scatter_plot(
+                df_qf_uflra, 
+                'yaga', 
+                'mathsat',
+                output_dir / f'{args.prefix}_QF_UFLRA_yaga_vs_mathsat.png',
+                title_suffix='QF_UFLRA',
+                timeout=args.timeout
+            )
+            if latex:
+                latex_tables.append(f"% QF_UFLRA: Yaga vs MathSAT\n{latex}")
+        else:
+            print("\nNo QF_UFLRA data found")
+        
+        # Combined QF_LRA + QF_UFLRA: yaga vs mathsat
+        df_combined = df[df['theory'].isin(['QF_LRA', 'QF_UFLRA'])]
+        if len(df_combined) > 0:
+            print(f"\n--- Combined QF_LRA + QF_UFLRA ({len(df_combined)} entries) ---")
+            
+            latex = create_scatter_plot(
+                df_combined, 
+                'Yaga', 
+                'MathSAT',
+                output_dir / f'{args.prefix}_combined_yaga_vs_mathsat.png',
+                title_suffix='QF_LRA + QF_UFLRA',
+                timeout=args.timeout
+            )
+            if latex:
+                latex_tables.append(f"% Combined QF_LRA + QF_UFLRA: Yaga vs MathSAT\n{latex}")
+        else:
+            print("\nNo combined data found")
+    else:
+        # Without theory mapping: create simple comparison plots for all data
+        print(f"\n--- All files ({len(df)} entries) ---")
+        
+        # Yaga vs MathSAT
         latex = create_scatter_plot(
-            df_qf_lra, 
+            df, 
+            'Yaga', 
+            'MathSAT',
+            output_dir / f'{args.prefix}_yaga_vs_mathsat.png',
+            title_suffix='',
+            timeout=args.timeout
+        )
+        if latex:
+            latex_tables.append(f"% Yaga vs MathSAT\n{latex}")
+        
+        # Yaga vs OpenSMT
+        latex = create_scatter_plot(
+            df, 
             'Yaga', 
             'OpenSMT',
-            output_dir / f'{args.prefix}_QF_LRA_yaga_vs_opensmt.png',
-            title_suffix='QF_LRA',
+            output_dir / f'{args.prefix}_yaga_vs_opensmt.png',
+            title_suffix='',
             timeout=args.timeout
         )
         if latex:
-            latex_tables.append(f"% QF_LRA: Yaga vs OpenSMT\n{latex}")
-        
-        latex = create_scatter_plot(
-            df_qf_lra, 
-            'YAGA', 
-            'MathSAT',
-            output_dir / f'{args.prefix}_QF_LRA_yaga_vs_mathsat.png',
-            title_suffix='QF_LRA',
-            timeout=args.timeout
-        )
-        if latex:
-            latex_tables.append(f"% QF_LRA: Yaga vs MathSAT\n{latex}")
-    else:
-        print("\nNo QF_LRA data found")
-    
-    # QF_UFLRA: yaga vs mathsat only
-    df_qf_uflra = df[df['theory'] == 'QF_UFLRA']
-    if len(df_qf_uflra) > 0:
-        print(f"\n--- QF_UFLRA ({len(df_qf_uflra)} entries) ---")
-        
-        latex = create_scatter_plot(
-            df_qf_uflra, 
-            'yaga', 
-            'mathsat',
-            output_dir / f'{args.prefix}_QF_UFLRA_yaga_vs_mathsat.png',
-            title_suffix='QF_UFLRA',
-            timeout=args.timeout
-        )
-        if latex:
-            latex_tables.append(f"% QF_UFLRA: Yaga vs MathSAT\n{latex}")
-    else:
-        print("\nNo QF_UFLRA data found")
-    
-    # Combined QF_LRA + QF_UFLRA: yaga vs mathsat
-    df_combined = df[df['theory'].isin(['QF_LRA', 'QF_UFLRA'])]
-    if len(df_combined) > 0:
-        print(f"\n--- Combined QF_LRA + QF_UFLRA ({len(df_combined)} entries) ---")
-        
-        latex = create_scatter_plot(
-            df_combined, 
-            'Yaga', 
-            'MathSAT',
-            output_dir / f'{args.prefix}_combined_yaga_vs_mathsat.png',
-            title_suffix='QF_LRA + QF_UFLRA',
-            timeout=args.timeout
-        )
-        if latex:
-            latex_tables.append(f"% Combined QF_LRA + QF_UFLRA: Yaga vs MathSAT\n{latex}")
-    else:
-        print("\nNo combined data found")
+            latex_tables.append(f"% Yaga vs OpenSMT\n{latex}")
     
     # Save averaged data to CSV
     output_csv = output_dir / f'{args.prefix}_averaged_results.csv'
@@ -483,6 +678,17 @@ def main():
             for solver in sorted(all_solvers):
                 count = error_counts.get(solver, 0)
                 f.write(f'% {solver.capitalize()}: {count}\n')
+            
+            # Add timeout counts per solver
+            f.write('\n% Timeout counts per solver (files where all runs timed out):\n')
+            for solver in sorted(all_solvers):
+                count = timeout_counts.get(solver, 0)
+                f.write(f'% {solver.capitalize()}: {count}\n')
+            
+            # Add files that timed out for ALL solvers
+            f.write(f'\n% Files that timed out for ALL solvers ({len(universal_timeout_files)} files):\n')
+            for filename in sorted(universal_timeout_files):
+                f.write(f'% {filename}\n')
         print(f"Saved LaTeX tables to: {latex_file}")
     
     print("\n" + "=" * 60)
