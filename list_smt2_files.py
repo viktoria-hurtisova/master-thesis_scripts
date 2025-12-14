@@ -5,7 +5,6 @@ Output format: theory,filename
   - theory: QF_LRA or QF_UFLRA
   - filename: name of the SMT2 file
 
-Note: Only non-incremental benchmarks are considered.
 """
 
 from pathlib import Path
