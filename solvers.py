@@ -132,6 +132,7 @@ class MathSat(InterpolantSolver):
         - Add (set-option :produce-interpolants true) at the start
         - Add (get-interpolant (A)) after (check-sat)
         - Replace :named with :interpolation-group
+        - Replace pi with pi0 to avoid MathSAT reserved constant conflict
         """
         # Read the original file
         with open(input_path, 'r', encoding='utf-8') as f:
@@ -169,31 +170,6 @@ class MathSat(InterpolantSolver):
         return str(output_path)
 
     def _postprocess(self, raw_output: str) -> str:
-        """
-        Postprocess MathSAT output to extract interpolant:
-        - Expects exactly two lines: sat/unsat result and interpolant
-        - Extract interpolant from the second line
-        - Replace (to_real <num>) with just the number within larger expressions
-        """
-
-        # import re
-        
-        # lines = raw_output.strip().split('\n')
-        
-        # Filter out empty lines
-        # non_empty_lines = [line.strip() for line in lines if line.strip()]
-        
-        # if len(non_empty_lines) < 2:
-        #    return None
-        
-        # First line should be sat/unsat, second line should be interpolant
-        # interpolant_line = non_empty_lines[1]
-        
-        # Replace (to_real <something>) with just the something
-        # pattern = r'\(to_real\s+((?:\(-\s*\d+\)|\d+))\)'
-        # interpolant = re.sub(pattern, r'\1', interpolant_line)
-        
-        #return interpolant.strip()
         return ""
 
 class Yaga(InterpolantSolver):
@@ -300,35 +276,6 @@ class OpenSMT(InterpolantSolver):
         return str(output_path)
 
     def _postprocess(self, raw_output: str) -> str:
-        """
-        Postprocess OpenSMT output to extract interpolant:
-        - Expects exactly two lines: sat/unsat result and interpolant
-        - Extract interpolant from the second line
-        - Remove outermost brackets if they exist
-        - Replace num1/num2 format with (/ num1 num2)
-        """
-        # lines = raw_output.strip().split('\n')
-        
-        # Filter out empty lines
-        # non_empty_lines = [line.strip() for line in lines if line.strip()]
-        
-        # if len(non_empty_lines) < 2:
-        #     return None
-        
-        # First line should be sat/unsat, second line should be interpolant
-        # interpolant = non_empty_lines[1]
-        
-        # Remove outermost brackets if they exist
-        # interpolant = interpolant.strip()
-        # if interpolant.startswith('(') and interpolant.endswith(')'):
-        #     interpolant = interpolant[1:-1]
-        
-        # Replace num1/num2 format with (/ num1 num2)
-        # Pattern to match numbers in fraction format (e.g., 1/2, 3/4, etc.)
-        # pattern = r'(\d+)/(\d+)'
-        # interpolant = re.sub(pattern, r'(/ \1 \2)', interpolant)
-        
-        # return interpolant.strip()
         return ""
 
 class Z3(InterpolantSolver):
@@ -337,11 +284,11 @@ class Z3(InterpolantSolver):
         super().__init__(config_path)
 
     def _preprocess(self, input_path: str) -> str:
-        #TODO: there will be no preprocessing for z3
+        # there will be no preprocessing for z3
         return input_path
 
     def _postprocess(self, raw_output: str) -> str:
-        # TODO: there will be no postprocessing for z3
+        # there will be no postprocessing for z3
         return raw_output.strip()   
 
 defined_solvers = ["mathsat", "yaga", "opensmt"]
