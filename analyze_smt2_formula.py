@@ -135,7 +135,6 @@ def main():
     
     # Resolve solver path relative to CWD (which matches run_solver_generic logic)
     # If the config says "z3/linux/bin/z3", and we run from root, it finds it.
-    # Note: run_solver_generic uses .expanduser().resolve() on the string path
     solver_path = Path(cfg["solver_path"]).expanduser().resolve()
     
     if not solver_path.exists():
