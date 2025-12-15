@@ -2,7 +2,12 @@
 Script to analyze solver benchmark results and create comparison scatter plots.
 
 Reads CSV files with structure:
-    solver, input_file, time_seconds, result, interpolant_produced, error
+    solver, input_file, time_seconds, result, error
+
+Result values:
+    - successful: solver completed successfully
+    - error: solver encountered an error
+    - timeout: solver timed out
 
 Uses a theory mapping file with structure:
     theory, mode, filename
@@ -116,7 +121,7 @@ def load_and_process_data(csv_directory, theory_df):
         combined_df['result'] = combined_df['result'].str.strip().str.lower()
     
     # Define error result types
-    error_results = ['stdout_error', 'stderr_error', 'unknown']
+    error_results = ['error']
     
     # Count errors per solver BEFORE filtering (excluding timeout)
     error_mask = combined_df['result'].isin(error_results)
@@ -128,28 +133,26 @@ def load_and_process_data(csv_directory, theory_df):
     
     # Group by solver and input_file with proper result handling
     # Time: average of ALL runs (including timeouts and errors)
-    # Result priority: sat/unsat (success) > error > timeout
+    # Result priority: successful > error > timeout
     def aggregate_results(group):
-        # Check if any run succeeded (sat or unsat)
-        successful_runs = group[group['result'].isin(['sat', 'unsat'])]
+        # Check if any run succeeded
+        successful_runs = group[group['result'] == 'successful']
         
         if len(successful_runs) > 0:
             # Use the result from successful runs, but average ALL times
             return pd.Series({
                 'time_seconds': group['time_seconds'].mean(),
-                'result': successful_runs['result'].iloc[0],
-                'interpolant_produced': successful_runs['interpolant_produced'].iloc[0],
+                'result': 'successful',
                 'error': successful_runs['error'].iloc[0] if pd.notna(successful_runs['error'].iloc[0]) else ''
             })
         
         # Check if any run had an error (not timeout)
-        error_runs = group[group['result'].isin(error_results)]
+        error_runs = group[group['result'] == 'error']
         if len(error_runs) > 0:
             # All runs either errored or timed out - use error result
             return pd.Series({
                 'time_seconds': group['time_seconds'].mean(),
-                'result': error_runs['result'].iloc[0],  # Keep the error type
-                'interpolant_produced': False,
+                'result': 'error',
                 'error': error_runs['error'].iloc[0]
             })
         
@@ -157,7 +160,6 @@ def load_and_process_data(csv_directory, theory_df):
         return pd.Series({
             'time_seconds': group['time_seconds'].mean(),
             'result': 'timeout',
-            'interpolant_produced': False,
             'error': group['error'].iloc[0]
         })
     
@@ -379,19 +381,16 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
     y_results = solver_y_data.loc[common_files, 'result'].values
     
     # Determine result category for each point
-    # Priority: error > timeout > sat/unsat (show errors prominently)
-    error_results = ['stdout_error', 'stderr_error', 'unknown']
+    # Priority: error > timeout > successful (show errors prominently)
     categories = []
     for x_res, y_res, x_t, y_t in zip(x_results, y_results, x_times, y_times):
         # Check for errors first (show them prominently)
-        if x_res in error_results or y_res in error_results:
+        if x_res == 'error' or y_res == 'error':
             categories.append('error')
         elif x_t >= timeout or y_t >= timeout:
             categories.append('timeout')
-        elif x_res == 'sat' or y_res == 'sat':
-            categories.append('sat')
-        elif x_res == 'unsat' or y_res == 'unsat':
-            categories.append('unsat')
+        elif x_res == 'successful' or y_res == 'successful':
+            categories.append('successful')
         else:
             categories.append('error')  # Fallback for any other unexpected result
     
@@ -404,8 +403,7 @@ def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", ti
     # Define markers and colors for each category
     # Using filled markers with transparency for better visibility
     marker_styles = {
-        'sat': {'marker': 's', 'color': '#2ecc71', 'alpha': 0.7, 'label': 'SAT', 'size': 40},
-        'unsat': {'marker': 'o', 'color': '#1a5276', 'alpha': 0.6, 'label': 'UNSAT', 'size': 40},
+        'successful': {'marker': 'o', 'color': '#1a5276', 'alpha': 0.6, 'label': 'successful', 'size': 40},
         'timeout': {'marker': '^', 'color': '#e74c3c', 'alpha': 0.8, 'label': 'timeout', 'size': 50},
         'error': {'marker': '*', 'color': '#e67e22', 'alpha': 0.9, 'label': 'error', 'size': 120}
     }

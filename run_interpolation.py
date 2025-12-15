@@ -72,8 +72,7 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
             'solver': solver.name, 
             'input_file': file_path.name, 
             'time_seconds': f"{time_val:.6f}", 
-            'result': result_val,
-            'interpolant_produced': interpolant is not None,
+            'result': 'successful',  # Will be updated if error occurs
             'error': None
         }
         
@@ -81,12 +80,12 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
         if stderr and stderr.strip():
             error_msg = f"Solver produced error output in stderr"
             result['error_message'] = error_msg
-            result['solver_run']['result'] = "stderr_error"
+            result['solver_run']['result'] = "error"
             result['solver_run']['error'] = error_msg
             # Store detailed results for file output even on error
             result['detailed_results'] = {
                 'file_name': file_path.name,
-                'result': "stderr_error",
+                'result': "error",
                 'solver_time': time_val,
                 'solver_interpolant': interpolant
             }
@@ -96,12 +95,12 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
         if stdout and "error" in stdout.lower():
             error_msg = f"Solver produced error in stdout"
             result['error_message'] = error_msg
-            result['solver_run']['result'] = "stdout_error"
+            result['solver_run']['result'] = "error"
             result['solver_run']['error'] = error_msg
             # Store detailed results for file output even on error
             result['detailed_results'] = {
                 'file_name': file_path.name,
-                'result': "stdout_error",
+                'result': "error",
                 'solver_time': time_val,
                 'solver_interpolant': interpolant
             }
@@ -112,12 +111,12 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
             if interpolant is None:
                 error_msg = f"{solver.name} did not produce an interpolant for UNSAT formula"
                 result['error_message'] = error_msg
-                result['solver_run']['result'] = "no_interpolant"
+                result['solver_run']['result'] = "error"
                 result['solver_run']['error'] = error_msg
                 # Store detailed results for file output even on error
                 result['detailed_results'] = {
                     'file_name': file_path.name,
-                    'result': "no_interpolant",
+                    'result': "error",
                     'solver_time': time_val,
                     'solver_interpolant': None
                 }
@@ -126,7 +125,7 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
         # Store detailed results for file output
         result['detailed_results'] = {
             'file_name': file_path.name,
-            'result': result_val,
+            'result': 'successful',
             'solver_time': time_val,
             'solver_interpolant': interpolant
         }
@@ -144,7 +143,6 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
             'input_file': file_path.name, 
             'time_seconds': f"{float(timeout):.6f}", 
             'result': "timeout",
-            'interpolant_produced': False,
             'error': error_msg
         }
         return result
@@ -159,7 +157,6 @@ def process_file(path: str, solver: InterpolantSolver, timeout: int = 600) -> Di
             'input_file': file_path.name, 
             'time_seconds': "0.000000", 
             'result': "error",
-            'interpolant_produced': False,
             'error': error_msg
         }
         return result
@@ -184,13 +181,12 @@ def write_results(file_result: Dict[str, Any], output_dir: Path, detailed: bool 
     if run:
         with csv_path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["solver", "input_file", "time_seconds", "result", "interpolant_produced", "error"])
+            writer.writerow(["solver", "input_file", "time_seconds", "result", "error"])
             writer.writerow([
                 run['solver'], 
                 run['input_file'], 
                 run['time_seconds'], 
                 run['result'], 
-                run['interpolant_produced'],
                 run['error']
             ])
     
