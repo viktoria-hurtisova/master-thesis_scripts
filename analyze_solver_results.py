@@ -345,7 +345,7 @@ def generate_latex_table(table, solver_x, solver_y, timeout):
     return '\n'.join(latex)
 
 
-def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", timeout=300):
+def create_scatter_plot(df, solver_x, solver_y, output_path, title_suffix="", timeout=600):
     """
     Create a scatter plot comparing two solvers with log scale and different markers.
     
@@ -518,8 +518,8 @@ def main():
     parser.add_argument(
         '--timeout',
         type=float,
-        default=300,
-        help='Timeout value in seconds (default: 300)'
+        default=600,
+        help='Timeout value in seconds (default: 600)'
     )
     
     args = parser.parse_args()
