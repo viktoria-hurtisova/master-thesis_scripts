@@ -12,12 +12,10 @@ Usage::
 
     python scripts/orchestrate_smt_pipeline.py <input_directory>
     python scripts/orchestrate_smt_pipeline.py <input_directory> --timeout 600
-    python scripts/orchestrate_smt_pipeline.py <input_directory> --skip-copy
     python scripts/orchestrate_smt_pipeline.py <input_directory> -o <output_directory>
 
 The output directory will be <input_directory>_unsat (e.g., inputs/test -> inputs/test_unsat)
-unless --skip-copy is used, in which case the input directory is used directly.
-If -o/--output is provided, that directory is used as the output for the copy step.
+by default. If -o/--output is provided, that directory is used instead.
 
 Requires only Python 3 (no external deps for this orchestrator).
 """
@@ -114,12 +112,6 @@ Examples:
     )
     
     parser.add_argument(
-        '--skip-copy',
-        action='store_true',
-        help='Skip step 1 (copy_unsat_files) and use the input directory directly'
-    )
-    
-    parser.add_argument(
         '-o', '--output',
         type=str,
         default=None,
@@ -140,10 +132,8 @@ Examples:
         print(f"Error: Input path is not a directory: {input_dir}")
         sys.exit(1)
     
-    # Determine working directory based on --skip-copy flag and --output argument
-    if args.skip_copy:
-        working_dir = input_dir
-    elif args.output:
+    # Determine output directory
+    if args.output:
         working_dir = Path(args.output).resolve()
     else:
         working_dir = input_dir.parent / f"{input_dir.name}_unsat"
@@ -152,29 +142,23 @@ Examples:
     print("SMT PROCESSING PIPELINE")
     print("=" * 60)
     print(f"Input directory:  {input_dir}")
-    if args.skip_copy:
-        print(f"Working directory: {working_dir} (using input directly, skipping copy)")
-    elif args.output:
+    if args.output:
         print(f"Output directory: {working_dir} (user-specified)")
     else:
         print(f"Output directory: {working_dir}")
     print(f"Timeout:          {args.timeout}s")
     
-    if args.skip_copy:
-        # Skip step 1, use input directory directly
-        print("\n⏭ Skipping step 1 (copy_unsat_files) - using input directory directly")
-    else:
-        # Step 1: Copy UNSAT files
-        script = get_script_path("copy_unsat_files.py")
-        if not run_script(script, [str(input_dir), str(working_dir)], 
-                          "Copy files with UNSAT status"):
-            print("\n✗ Pipeline failed at step 1 (copy_unsat_files)")
-            sys.exit(1)
-        
-        # Check if output directory was created
-        if not working_dir.exists():
-            print(f"\n✗ Output directory was not created: {working_dir}")
-            sys.exit(1)
+    # Step 1: Copy UNSAT files
+    script = get_script_path("copy_unsat_files.py")
+    if not run_script(script, [str(input_dir), str(working_dir)], 
+                      "Copy files with UNSAT status"):
+        print("\n✗ Pipeline failed at step 1 (copy_unsat_files)")
+        sys.exit(1)
+    
+    # Check if output directory was created
+    if not working_dir.exists():
+        print(f"\n✗ Output directory was not created: {working_dir}")
+        sys.exit(1)
     
     smt_files = list(working_dir.glob("*.smt2"))
     if not smt_files:
