@@ -101,7 +101,7 @@ def _strip_named_wrapper(assert_body: str) -> str:
 def create_verification_input_file(source_path: str, interpolant: str) -> str:
     """
     Create a verification SMT-LIB file that checks Craig's interpolant conditions for a single interpolant I.
-    If SAT, I is NOT a valid interpolant; if UNSAT, I IS a valid interpolant:
+    Both conditions must be UNSAT:
       1) A ∧ ¬I (counterexample to A ⇒ I)
       2) I ∧ B (counterexample to I ⇒ ¬B)
     The function extracts A and B from the original file using :named or :interpolation-group attributes.
@@ -159,8 +159,14 @@ def create_verification_input_file(source_path: str, interpolant: str) -> str:
             continue
         processed_lines.append(line)
 
-    processed_lines.append(f'(assert (and (=> {a_formula} {interpolant_replaced}) (=> {interpolant_replaced} (not {b_formula}))))')
+    processed_lines.append(f'(push 1)')
+    processed_lines.append(f'(assert (and {a_formula} (not {interpolant_replaced})))')
     processed_lines.append('(check-sat)')
+    processed_lines.append('(pop 1)')
+    processed_lines.append(f'(push 1)')
+    processed_lines.append(f'(assert (and {interpolant_replaced} {b_formula}))')
+    processed_lines.append('(check-sat)')
+    processed_lines.append('(pop 1)')
     processed_lines.append('(exit)')
 
     with open(output_path, 'w', encoding='utf-8') as f:
@@ -170,13 +176,8 @@ def create_verification_input_file(source_path: str, interpolant: str) -> str:
 
 def verify_interpolant(file_path: str, interpolant: str, timeout: int = 600) -> Tuple[bool, Optional[str], str, str]:
     """
-    Verify a single interpolant against Craig's conditions using Z3 by checking:
-    A ⇒ I ∧ I ⇒ ¬B is SAT
-
+    Verify a single interpolant against Craig's conditions using Z3 by checking if both conditions A ∧ ¬I and I ∧ B are UNSAT.
     Returns tuple (is_verified, z3_output, z3_stdout, z3_stderr) where z3_output contains stdout and stderr combined.
-    
-    Raises:
-        RuntimeError: If Z3 execution fails
     """
     z3_output = None
     z3_stdout = ""
@@ -197,9 +198,20 @@ def verify_interpolant(file_path: str, interpolant: str, timeout: int = 600) -> 
             error_msg = f"Z3 solver ended with an error in stdout: {stdout}"
             raise RuntimeError(error_msg)
 
-        # Verify that  A ⇒ I ∧ I ⇒ ¬B	
-        is_verified = (sat_result == "sat")
-        # print(f"Verification result: {sat_result}")
+        # Parse stdout to get both check-sat results
+        # The verification file has two check-sat calls:
+        #   1) A ∧ ¬I - should be UNSAT (no counterexample to A ⇒ I)
+        #   2) I ∧ B  - should be UNSAT (no counterexample to I ⇒ ¬B)
+        lines = stdout.strip().split('\n') if stdout else []
+        results = [line.strip() for line in lines if line.strip() in ('sat', 'unsat', 'unknown')]
+        
+        if len(results) != 2:
+            error_msg = f"Expected 2 check-sat results, got {len(results)}: {results}"
+            raise RuntimeError(error_msg)
+        
+        # Both conditions must be UNSAT for the interpolant to be valid
+        is_verified = (results[0] == "unsat" and results[1] == "unsat")
+        # print(f"Verification results: {results[0]}, {results[1]} -> verified={is_verified}")
         
         # Combine stdout and stderr for z3_output
         z3_output = f"STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}" if (stdout or stderr) else None
