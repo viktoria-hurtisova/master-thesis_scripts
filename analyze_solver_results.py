@@ -585,7 +585,7 @@ def main():
             
             latex = create_scatter_plot(
                 df_qf_lra, 
-                'YAGA', 
+                'Yaga', 
                 'MathSAT',
                 output_dir / f'{args.prefix}_QF_LRA_yaga_vs_mathsat.png',
                 title_suffix='QF_LRA',
@@ -603,8 +603,8 @@ def main():
             
             latex = create_scatter_plot(
                 df_qf_uflra, 
-                'yaga', 
-                'mathsat',
+                'Yaga', 
+                'MathSAT',
                 output_dir / f'{args.prefix}_QF_UFLRA_yaga_vs_mathsat.png',
                 title_suffix='QF_UFLRA',
                 timeout=args.timeout
